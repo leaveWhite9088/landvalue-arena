@@ -165,8 +165,9 @@ export function computePrices(state: State, formations = findFormations(state)):
   for (const inst of state.instances) {
     const b = buildingOf(state, inst.typeId);
     const pct = innatePctOf(b?.w ?? 1, b?.h ?? 1);
-    const label = (b ? b.name : "建筑") + " @ (" + inst.anchorR + "," + inst.anchorC + ")  周围";
-    for (const cell of surroundCells(state, inst)) {
+    const label = (b ? b.name : "建筑") + " @ (" + inst.anchorR + "," + inst.anchorC + ")  固有";
+    // 自身占地和周围都吃这一笔，每座只乘一次
+    for (const cell of auraCells(state, inst)) {
       const k = cellKey(cell.r, cell.c);
       if (prices[k] === undefined) continue;
       prices[k] *= 1 + pct / 100;
@@ -381,6 +382,7 @@ const SHOP_DEFS: ShopDef[] = [
   ["b_meituan", "美团外卖", "1x1", 8],
   ["b_popmart", "泡泡玛特", "1x1", 12],
   ["b_decathlon", "迪卡侬", "1x1", 22],
+  ["b_tesla", "特斯拉", "1x1", 30],
   // —— 1×2（贴图卡片 1×2 或 2×1，统一按 1×2）——
   ["b_manner", "MANNER咖啡", "1x2", 22],
   ["b_naixue", "奈雪的茶", "1x2", 26],
@@ -392,7 +394,6 @@ const SHOP_DEFS: ShopDef[] = [
   ["b_sfexpress", "顺丰速运", "1x2", 24],
   ["b_byd", "比亚迪", "1x2", 54],
   ["b_chowtaifook", "周大福", "1x2", 56],
-  ["b_tesla", "特斯拉", "1x2", 60],
   // —— 2×2 旗舰店 ——
   ["b_zhongshuge", "钟书阁", "2x2", 64],
   ["b_jiajuguan", "家居馆", "2x2", 70],

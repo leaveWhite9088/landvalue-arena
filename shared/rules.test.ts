@@ -49,7 +49,7 @@ test("一座 2×2 在需要两座甲的街里只算一座", () => {
   assert.equal(findFormations(s)[0].instanceIds.length, 3);
 });
 
-test("同一条街对同一格只生效一次，周围 10% 另算", () => {
+test("同一条街对同一格只生效一次，自身占地也吃固有光环", () => {
   let s = bare();
   s.cols = 5;
   s.streets = [{ id: "st", name: "试街", types: ["C", "A", "B"], pct: 20 }];
@@ -59,10 +59,29 @@ test("同一条街对同一格只生效一次，周围 10% 另算", () => {
   s = put(s, "A", 2, 4, "a1");
   s = put(s, "B", 2, 5, "b1");
   const { prices, ledger } = computePrices(s);
-  assert.equal(prices["2,2"], 120);
-  assert.equal(prices["2,3"], 132);
-  assert.equal(ledger["2,3"].filter(line => line.pct === 20).length, 1);
-  assert.equal(ledger["2,2"].some(line => line.pct === 10), false);
+  // C 是 2×1，固有 20%。自身 (2,2) 吃到自己的 20% 和街的 20%，吃不到甲的 10%
+  assert.equal(round1(prices["2,2"]), 144);
+  // (2,3) 是 C 的另一格，又在甲的周围：20% × 10% × 街 20%
+  assert.equal(round1(prices["2,3"]), 158.4);
+  assert.equal(ledger["2,3"].filter(line => line.pct === 20 && line.label === "试街").length, 1);
+  assert.equal(ledger["2,2"].some(line => line.pct === 20 && line.label.includes("固有")), true);
+});
+
+test("自身占地吃到自己的固有光环，也吃到专业街", () => {
+  let s = bare();
+  s.streets = [];
+  s = put(s, "A", 2, 2, "a1");
+  let { prices, ledger } = computePrices(s);
+  assert.equal(round1(prices["2,2"]), 110);
+  assert.equal(ledger["2,2"].some(line => line.pct === 10), true);
+
+  s.streets = [{ id: "st", name: "试街", types: ["A", "B", "X"], pct: 20 }];
+  s = put(s, "B", 2, 3, "b1");
+  s = put(s, "X", 2, 4, "x1");
+  ({ prices, ledger } = computePrices(s));
+  // 甲的自身格：自己 10%、乙的 10%、街 20%。桥在 (2,4)，够不着 (2,2)
+  assert.equal(round1(prices["2,2"]), 145.2);
+  assert.equal(ledger["2,2"].some(line => line.label === "试街"), true);
 });
 
 test("对角相邻算连通，隔格和外来建筑都不连通", () => {
@@ -192,6 +211,9 @@ test("默认配置：45 个建筑、20 条街、6×6 空棋盘，街的类型都
   const flagship = view.streets.find(s => s.id === "s_flagship")!;
   assert.ok(flagship.types.every(t => areaOf(t) === 4));
   assert.ok(flagship.pct >= Math.max(...view.streets.map(s => s.pct)));
+  const tesla = view.buildings.find(b => b.id === "b_tesla");
+  assert.equal(tesla?.w, 1);
+  assert.equal(tesla?.h, 1);
   // 每个建筑至少属于一条街
   for (const b of view.buildings) {
     assert.ok(view.streets.some(st => st.types.includes(b.id)), b.name + " 不属于任何街");
