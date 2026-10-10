@@ -196,16 +196,27 @@ export class Palette {
       });
       name.value = "";
     });
-    const row = el("div", "row");
-    row.append(name, ...slots, pct, add);
-    panel.append(row);
-    if (!view.streets.length) panel.append(el("p", "hint", "一条街是三种建筑加一个加成百分比。"));
+    const draft = el("div", "street-item");
+    const line1 = el("div", "street-line");
+    line1.append(name, el("span", "pct-label", "周围地价"), pct, el("span", "pct-label", "%"), add);
+    const line2 = el("div", "street-line");
+    line2.append(...slots);
+    draft.append(line1, line2);
+    panel.append(draft);
+    if (!view.streets.length) panel.append(el("p", "hint", "一条街是三种建筑加一个周围地价加成。"));
     for (const st of view.streets) {
-      const item = el("div", "item");
-      const fields = el("div", "item-fields");
+      const item = el("div", "street-item");
       const nm = textInput(st.name);
       nm.value = st.name;
       nm.addEventListener("change", () => this.send({ type: "updateStreet", id: st.id, name: nm.value }));
+      const p = numInput(String(st.pct));
+      p.value = String(st.pct);
+      p.addEventListener("change", () => this.send({ type: "updateStreet", id: st.id, pct: Number(p.value) }));
+      const del = el("button", "text-btn danger", "删除");
+      del.type = "button";
+      del.addEventListener("click", () => this.send({ type: "deleteStreet", id: st.id }));
+      const top = el("div", "street-line");
+      top.append(nm, el("span", "pct-label", "周围地价"), p, el("span", "pct-label", "%"), del);
       const selects = st.types.map(id => buildingSelect(view, id));
       const commit = () => this.send({
         type: "updateStreet",
@@ -213,14 +224,9 @@ export class Palette {
         types: [selects[0].value, selects[1].value, selects[2].value],
       });
       selects.forEach(sel => sel.addEventListener("change", commit));
-      const p = numInput(String(st.pct));
-      p.value = String(st.pct);
-      p.addEventListener("change", () => this.send({ type: "updateStreet", id: st.id, pct: Number(p.value) }));
-      fields.append(nm, ...selects, p);
-      const del = el("button", "text-btn danger", "删除");
-      del.type = "button";
-      del.addEventListener("click", () => this.send({ type: "deleteStreet", id: st.id }));
-      item.append(fields, del);
+      const bottom = el("div", "street-line");
+      bottom.append(...selects);
+      item.append(top, bottom);
       panel.append(item);
     }
   }

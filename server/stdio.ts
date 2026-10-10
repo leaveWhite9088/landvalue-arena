@@ -53,10 +53,11 @@ server.registerTool("get_map", { description: desc("get_map") }, async () => {
 server.registerTool("place_building", {
   description: desc("place_building"),
   inputSchema: {
-    buildingTypeId: z.string().describe("建筑类型标识，来自 list_buildings"),
-    row: z.number().int().describe("锚点行，从 1 计"),
-    col: z.number().int().describe("锚点列，从 1 计"),
-    rotated: z.boolean().optional().describe("旋转 90°：仅两格建筑有效，true 时宽高互换"),
+    buildingTypeId: z.string().describe("建筑类型标识，来自 list_buildings，不是场上某一座的 id"),
+    board: z.number().int().describe("棋盘编号，从 1 计。先看 get_map 的 boards，不要猜，也不要省略"),
+    row: z.number().int().describe("锚点行，从 1 计，属于这块棋盘。锚点是占地左上角"),
+    col: z.number().int().describe("锚点列，从 1 计，属于这块棋盘"),
+    rotated: z.boolean().optional().describe("旋转 90°：仅两格建筑有效，true 时宽高互换。1×1 和 2×2 忽略"),
     reason: z.string().describe("放置理由，必填，不参与计算"),
   },
 }, async (args) => pack(await call("place_building", args)));
@@ -64,8 +65,9 @@ server.registerTool("place_building", {
 server.registerTool("demolish_building", {
   description: desc("demolish_building"),
   inputSchema: {
-    row: z.number().int().describe("任一占地格的行，从 1 计"),
-    col: z.number().int().describe("任一占地格的列，从 1 计"),
+    board: z.number().int().describe("棋盘编号，从 1 计。先看 get_map，不要猜"),
+    row: z.number().int().describe("该座占地中任意一格的行，从 1 计"),
+    col: z.number().int().describe("该座占地中任意一格的列，从 1 计"),
     reason: z.string().describe("拆除理由，必填，不参与计算"),
   },
 }, async (args) => pack(await call("demolish_building", args)));

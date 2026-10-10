@@ -1,5 +1,5 @@
 import { previewPlacement } from "../shared/rules.ts";
-import type { KanbanEvent, SaveMeta, UserCommand, ViewModel } from "../shared/types.ts";
+import type { Coord, KanbanEvent, SaveMeta, UserCommand, ViewModel } from "../shared/types.ts";
 import { Modal } from "./modal.ts";
 import { Net } from "./net.ts";
 import { Palette } from "./palette.ts";
@@ -31,12 +31,12 @@ let railCollapsed = true;
 let suppressAuto = false;
 let formationsOpen = false;
 let connected = false;
-let lastCell: { r: number; c: number } | null = null;
+let lastCell: Coord | null = null;
 
 // 旋转或切换武装后，按当前悬停格重算预览，避免幻影停留在旧朝向
 function refreshGhost() {
   if (!scrubId && selectedType && lastCell && live) {
-    const preview = previewPlacement(live, selectedType, lastCell.r, lastCell.c, rotated);
+    const preview = previewPlacement(live, selectedType, lastCell.board, lastCell.r, lastCell.c, rotated);
     scene.setGhost(preview.cells, preview.ok);
   }
 }
@@ -75,7 +75,7 @@ async function send(command: UserCommand) {
     const result = await net.command(command);
     if (!result.ok && result.error) ui.toast(result.error.message);
     if (result.exportData) download(result.exportData);
-    if (command.type === "place" || command.type === "demolish") selectedInstance = null;
+    if (command.type === "place" || command.type === "demolish" || command.type === "resetBoard" || command.type === "clearBoard" || command.type === "reset") selectedInstance = null;
     return result;
   } catch {
     ui.toast("没有连上沙盘服务。");
@@ -124,15 +124,15 @@ net.onDown = () => {
   else ui.toast("连接中断，正在重试。");
 };
 
-function demolishAt(r: number, c: number) {
+function demolishAt(cell: Coord) {
   if (!live || scrubId) return;
-  const found = live.cells.find(cell => cell.r === r && cell.c === c);
+  const found = live.cells.find(item => item.board === cell.board && item.r === cell.r && item.c === cell.c);
   const inst = found?.instanceId ? live.instances.find(i => i.id === found.instanceId) : undefined;
   if (!inst) {
     ui.toast("这里没有建筑。");
     return;
   }
-  void send({ type: "demolish", r: inst.anchorR, c: inst.anchorC });
+  void send({ type: "demolish", board: inst.board, r: inst.anchorR, c: inst.anchorC });
 }
 
 scene.onCell = (cell, kind, x, y) => {
@@ -141,31 +141,31 @@ scene.onCell = (cell, kind, x, y) => {
   if (kind === "move") {
     lastCell = cell;
     if (!scrubId && demolishMode && cell && live) {
-      const found = live.cells.find(c => c.r === cell.r && c.c === cell.c);
+      const found = live.cells.find(c => c.board === cell.board && c.r === cell.r && c.c === cell.c);
       const inst = found?.instanceId ? live.instances.find(i => i.id === found.instanceId) : undefined;
       if (inst) scene.setGhost(inst.cells, false);
       else scene.clearGhost();
     } else if (!scrubId && selectedType && cell && live) {
-      const preview = previewPlacement(live, selectedType, cell.r, cell.c, rotated);
+      const preview = previewPlacement(live, selectedType, cell.board, cell.r, cell.c, rotated);
       scene.setGhost(preview.cells, preview.ok);
     } else scene.clearGhost();
     ui.placeHover(view, cell, x, y, !!selectedInstance && !scrubId && !demolishMode);
     return;
   }
   if (kind === "context") {
-    if (cell) demolishAt(cell.r, cell.c);
+    if (cell) demolishAt(cell);
     return;
   }
   if (scrubId || !cell || !live) return;
   if (demolishMode) {
-    demolishAt(cell.r, cell.c);
+    demolishAt(cell);
     return;
   }
   if (selectedType) {
-    void send({ type: "place", typeId: selectedType, anchorR: cell.r, anchorC: cell.c, rotated });
+    void send({ type: "place", typeId: selectedType, board: cell.board, anchorR: cell.r, anchorC: cell.c, rotated });
     return;
   }
-  const found = live.cells.find(c => c.r === cell.r && c.c === cell.c);
+  const found = live.cells.find(c => c.board === cell.board && c.r === cell.r && c.c === cell.c);
   selectedInstance = found?.instanceId ?? null;
   paint();
 };
@@ -197,7 +197,7 @@ ui.onDemolish = () => {
   if (!selectedInstance || !live || scrubId) return;
   const inst = live.instances.find(i => i.id === selectedInstance);
   if (!inst) return;
-  void send({ type: "demolish", r: inst.anchorR, c: inst.anchorC });
+  void send({ type: "demolish", board: inst.board, r: inst.anchorR, c: inst.anchorC });
 };
 ui.onOpenConfig = () => modal.open();
 ui.onOpenBuild = () => palette.open();

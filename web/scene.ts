@@ -1,27 +1,29 @@
-import type { Cell, InstanceView, ViewModel } from "../shared/types.ts";
+import type { Coord, InstanceView, ViewModel } from "../shared/types.ts";
 
 const HW = 58;
 const HH = 29;
 
-// 两格建筑旋转后用镜像贴图：name.png -> name-r.png
 function rotatedImageSrc(src: string): string {
   return src.replace(/\.png$/, "-r.png");
 }
 
 type Pt = { x: number; y: number };
+type Slot = { board: number; rows: number; cols: number; ox: number; oy: number };
+type Box = { minX: number; maxX: number; minY: number; maxY: number; w: number; h: number };
 
 export class Scene {
   private ctx: CanvasRenderingContext2D;
   private view: ViewModel | null = null;
-  private ghost: Cell[] = [];
+  private ghost: Coord[] = [];
   private ghostOk = true;
   private emphasis = new Set<string>();
   private images = new Map<string, HTMLImageElement>();
+  private slots: Slot[] = [];
   private scale = 1;
   private originX = 0;
   private originY = 0;
   private dpr = 1;
-  onCell: (cell: Cell | null, kind: "move" | "click" | "context", x: number, y: number) => void = () => {};
+  onCell: (cell: Coord | null, kind: "move" | "click" | "context", x: number, y: number) => void = () => {};
 
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d");
@@ -53,7 +55,7 @@ export class Scene {
     this.draw();
   }
 
-  setGhost(cells: Cell[], ok: boolean) {
+  setGhost(cells: Coord[], ok: boolean) {
     this.ghost = cells;
     this.ghostOk = ok;
     this.draw();
@@ -82,21 +84,12 @@ export class Scene {
     return { x: (c - r) * HW, y: (c + r) * HH };
   }
 
-  private layout() {
-    const view = this.view;
-    const w = this.canvas.clientWidth;
-    const h = this.canvas.clientHeight;
-    if (!view || w < 2 || h < 2) {
-      this.scale = 1;
-      this.originX = w / 2;
-      this.originY = h / 2;
-      return;
-    }
+  private boardBox(rows: number, cols: number): Box {
     const corners = [
-      this.raw(1, 1),
-      this.raw(1, view.cols + 1),
-      this.raw(view.rows + 1, view.cols + 1),
-      this.raw(view.rows + 1, 1),
+      this.raw(0.45, 0.45),
+      this.raw(0.45, cols + 1.55),
+      this.raw(rows + 1.55, cols + 1.55),
+      this.raw(rows + 1.55, 0.45),
     ];
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of corners) {
@@ -105,32 +98,83 @@ export class Scene {
       minY = Math.min(minY, p.y);
       maxY = Math.max(maxY, p.y);
     }
-    minY -= HW * 1.7;
-    maxY += 20;
-    const bw = maxX - minX;
-    const bh = maxY - minY;
-    this.scale = Math.min((w - 36) / bw, (h - 28) / bh);
+    minY -= HW * 1.55;
+    return { minX, maxX, minY, maxY, w: maxX - minX, h: maxY - minY };
+  }
+
+  private arrange(view: ViewModel): Slot[] {
+    const boxes = view.boards.map(b => this.boardBox(b.rows, b.cols));
+    const cols = view.boards.length <= 1 ? 1 : 2;
+    const gap = 48;
+    const colW = Math.max(...boxes.map(b => b.w), 1);
+    const rowH = Math.max(...boxes.map(b => b.h), 1);
+    return view.boards.map((b, i) => {
+      const box = boxes[i];
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      return {
+        board: b.board,
+        rows: b.rows,
+        cols: b.cols,
+        ox: col * (colW + gap) - box.minX,
+        oy: row * (rowH + gap) - box.minY,
+      };
+    });
+  }
+
+  private layout() {
+    const view = this.view;
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    if (!view || w < 2 || h < 2 || !view.boards.length) {
+      this.slots = [];
+      this.scale = 1;
+      this.originX = w / 2;
+      this.originY = h / 2;
+      return;
+    }
+    this.slots = this.arrange(view);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const slot of this.slots) {
+      const box = this.boardBox(slot.rows, slot.cols);
+      minX = Math.min(minX, box.minX + slot.ox);
+      maxX = Math.max(maxX, box.maxX + slot.ox);
+      minY = Math.min(minY, box.minY + slot.oy);
+      maxY = Math.max(maxY, box.maxY + slot.oy);
+    }
+    const bw = Math.max(1, maxX - minX);
+    const bh = Math.max(1, maxY - minY);
+    this.scale = Math.min((w - 28) / bw, (h - 36) / bh);
     this.originX = w / 2 - ((minX + maxX) / 2) * this.scale;
-    this.originY = h / 2 - ((minY + maxY) / 2) * this.scale + 8;
+    this.originY = h / 2 - ((minY + maxY) / 2) * this.scale + 6;
   }
 
-  private toScreen(p: Pt): Pt {
-    return { x: this.originX + p.x * this.scale, y: this.originY + p.y * this.scale };
+  private toScreen(p: Pt, slot: Slot): Pt {
+    return { x: this.originX + (p.x + slot.ox) * this.scale, y: this.originY + (p.y + slot.oy) * this.scale };
   }
 
-  private pick(clientX: number, clientY: number): Cell | null {
+  private slotOf(board: number): Slot | undefined {
+    return this.slots.find(slot => slot.board === board);
+  }
+
+  private pick(clientX: number, clientY: number): Coord | null {
     const view = this.view;
     if (!view) return null;
     const rect = this.canvas.getBoundingClientRect();
     const sx = (clientX - rect.left - this.originX) / this.scale;
     const sy = (clientY - rect.top - this.originY) / this.scale;
-    const c = (sx / HW + sy / HH) / 2;
-    const r = (sy / HH - sx / HW) / 2;
-    const cell = { r: Math.floor(r), c: Math.floor(c) };
-    if (cell.r < 1 || cell.c < 1 || cell.r > view.rows || cell.c > view.cols) return null;
-    const found = view.cells.find(item => item.r === cell.r && item.c === cell.c);
-    if (!found?.enabled) return null;
-    return cell;
+    for (const slot of this.slots) {
+      const x = sx - slot.ox;
+      const y = sy - slot.oy;
+      const c = (x / HW + y / HH) / 2;
+      const r = (y / HH - x / HW) / 2;
+      const cell = { board: slot.board, r: Math.floor(r), c: Math.floor(c) };
+      if (cell.r < 1 || cell.c < 1 || cell.r > slot.rows || cell.c > slot.cols) continue;
+      const found = view.cells.find(item => item.board === cell.board && item.r === cell.r && item.c === cell.c);
+      if (!found?.enabled) continue;
+      return cell;
+    }
+    return null;
   }
 
   private draw() {
@@ -146,12 +190,17 @@ export class Scene {
     const view = this.view;
     if (!view) return;
     this.layout();
-    this.drawTable(view);
-    const cells = view.cells.filter(c => c.enabled).sort((a, b) => a.r + a.c - (b.r + b.c));
-    for (const cell of cells) this.drawTile(cell.r, cell.c, tileColor(cell.priceExact, view.stats.max));
+    for (const slot of this.slots) {
+      this.drawTable(slot);
+      const cells = view.cells.filter(c => c.board === slot.board && c.enabled).sort((a, b) => a.r + a.c - (b.r + b.c));
+      for (const cell of cells) this.drawTile(slot, cell.r, cell.c, tileColor(cell.priceExact, view.stats.max));
+    }
     if (this.ghost.length) {
       const fill = this.ghostOk ? "rgba(63, 94, 120, 0.28)" : "rgba(154, 64, 56, 0.32)";
-      for (const cell of this.ghost) this.drawTile(cell.r, cell.c, fill);
+      for (const cell of this.ghost) {
+        const slot = this.slotOf(cell.board);
+        if (slot) this.drawTile(slot, cell.r, cell.c, fill);
+      }
     }
     const instances = view.instances.slice().sort((a, b) =>
       (a.anchorR + a.h + a.anchorC + a.w) - (b.anchorR + b.h + b.anchorC + b.w));
@@ -159,15 +208,26 @@ export class Scene {
     if (this.emphasis.size) {
       for (const inst of instances) if (this.emphasis.has(inst.id)) this.strokeFootprint(inst, "#3f5e78");
     }
+    for (const slot of this.slots) this.drawLabel(slot);
     this.drawLegend(view);
   }
 
-  private drawTable(view: ViewModel) {
+  private drawLabel(slot: Slot) {
     const ctx = this.ctx;
-    const top = this.toScreen(this.raw(0.55, 0.55));
-    const right = this.toScreen(this.raw(0.55, view.cols + 1.45));
-    const bottom = this.toScreen(this.raw(view.rows + 1.45, view.cols + 1.45));
-    const left = this.toScreen(this.raw(view.rows + 1.45, 0.55));
+    const top = this.toScreen(this.raw(0.15, (slot.cols + 1) / 2), slot);
+    ctx.fillStyle = "#7a746c";
+    ctx.font = "12px \"PingFang SC\", \"Microsoft YaHei\", sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("棋盘 " + slot.board + "  " + slot.rows + "×" + slot.cols, top.x, top.y - 4);
+  }
+
+  private drawTable(slot: Slot) {
+    const ctx = this.ctx;
+    const top = this.toScreen(this.raw(0.55, 0.55), slot);
+    const right = this.toScreen(this.raw(0.55, slot.cols + 1.45), slot);
+    const bottom = this.toScreen(this.raw(slot.rows + 1.45, slot.cols + 1.45), slot);
+    const left = this.toScreen(this.raw(slot.rows + 1.45, 0.55), slot);
     ctx.save();
     ctx.shadowColor = "rgba(38, 41, 45, 0.14)";
     ctx.shadowBlur = 28;
@@ -178,12 +238,12 @@ export class Scene {
     ctx.restore();
   }
 
-  private drawTile(r: number, c: number, color: string) {
+  private drawTile(slot: Slot, r: number, c: number, color: string) {
     const ctx = this.ctx;
-    const top = this.toScreen(this.raw(r, c));
-    const right = this.toScreen(this.raw(r, c + 1));
-    const bottom = this.toScreen(this.raw(r + 1, c + 1));
-    const left = this.toScreen(this.raw(r + 1, c));
+    const top = this.toScreen(this.raw(r, c), slot);
+    const right = this.toScreen(this.raw(r, c + 1), slot);
+    const bottom = this.toScreen(this.raw(r + 1, c + 1), slot);
+    const left = this.toScreen(this.raw(r + 1, c), slot);
     const face = inset([top, right, bottom, left], 0.05);
     poly(ctx, face);
     ctx.fillStyle = color;
@@ -194,14 +254,14 @@ export class Scene {
   }
 
   private strokeFootprint(inst: InstanceView, color: string) {
+    const slot = this.slotOf(inst.board);
+    if (!slot) return;
     const ctx = this.ctx;
-    const r = inst.anchorR;
-    const c = inst.anchorC;
     const pts = [
-      this.toScreen(this.raw(r, c)),
-      this.toScreen(this.raw(r, c + inst.w)),
-      this.toScreen(this.raw(r + inst.h, c + inst.w)),
-      this.toScreen(this.raw(r + inst.h, c)),
+      this.toScreen(this.raw(inst.anchorR, inst.anchorC), slot),
+      this.toScreen(this.raw(inst.anchorR, inst.anchorC + inst.w), slot),
+      this.toScreen(this.raw(inst.anchorR + inst.h, inst.anchorC + inst.w), slot),
+      this.toScreen(this.raw(inst.anchorR + inst.h, inst.anchorC), slot),
     ];
     poly(ctx, pts);
     ctx.strokeStyle = color;
@@ -224,16 +284,19 @@ export class Scene {
   }
 
   private drawSprite(inst: InstanceView, img: HTMLImageElement) {
-    // 宽度按占地的水平跨度（(w+h) 个半格宽）定，贴图底座中心对准占地中心
-    const cx = this.toScreen(this.raw(inst.anchorR + inst.h / 2, inst.anchorC + inst.w / 2));
+    const slot = this.slotOf(inst.board);
+    if (!slot) return;
+    const cx = this.toScreen(this.raw(inst.anchorR + inst.h / 2, inst.anchorC + inst.w / 2), slot);
     const dw = (inst.w + inst.h) * HW * this.scale * 0.62;
     const dh = dw * (img.naturalHeight / img.naturalWidth);
     this.ctx.drawImage(img, cx.x - dw / 2, cx.y - dh * 0.85, dw, dh);
   }
 
   private drawToken(inst: InstanceView, color: string, name: string) {
+    const slot = this.slotOf(inst.board);
+    if (!slot) return;
     const ctx = this.ctx;
-    const box = this.footprint(inst.anchorR + 0.28, inst.anchorC + 0.28, Math.max(0.4, inst.w - 0.56), Math.max(0.4, inst.h - 0.56));
+    const box = this.footprint(slot, inst.anchorR + 0.28, inst.anchorC + 0.28, Math.max(0.4, inst.w - 0.56), Math.max(0.4, inst.h - 0.56));
     const lift = 16 * this.scale;
     const top = box.map(p => ({ x: p.x, y: p.y - lift }));
     ctx.beginPath();
@@ -264,12 +327,12 @@ export class Scene {
     }
   }
 
-  private footprint(r: number, c: number, w: number, h: number): Pt[] {
+  private footprint(slot: Slot, r: number, c: number, w: number, h: number): Pt[] {
     return [
-      this.toScreen(this.raw(r, c)),
-      this.toScreen(this.raw(r, c + w)),
-      this.toScreen(this.raw(r + h, c + w)),
-      this.toScreen(this.raw(r + h, c)),
+      this.toScreen(this.raw(r, c), slot),
+      this.toScreen(this.raw(r, c + w), slot),
+      this.toScreen(this.raw(r + h, c + w), slot),
+      this.toScreen(this.raw(r + h, c), slot),
     ];
   }
 

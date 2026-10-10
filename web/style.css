@@ -232,7 +232,16 @@ button { cursor: pointer; }
 
 .step strong { display: block; font-weight: 600; font-size: 13.5px; }
 .step .reason { margin: 4px 0 0; font-size: 13px; }
-.step .detail { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.step .snap, .read-line .snap {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+}
+
+.read-line .snap { color: #5c564e; }
 
 .read-line {
   display: block;
@@ -425,8 +434,8 @@ input[type="number"] { width: 72px; }
 }
 
 .hole-cell {
-  width: 36px;
-  height: 36px;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--line);
   background: #e7dccb;
   padding: 0;
@@ -444,6 +453,24 @@ input[type="number"] { width: 72px; }
 }
 
 .item-fields { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+.board-block {
+  padding: 8px 0 12px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 8px;
+}
+
+.street-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.street-line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+.pct-label { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
 .save-item {
   display: flex;

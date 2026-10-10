@@ -1,22 +1,23 @@
-import type { AppError, Building, State, UserCommand } from "./types.ts";
-import { isShape } from "./types.ts";
+import type { AppError, Board, Building, State, UserCommand } from "./types.ts";
+import { isShape, MAX_BOARDS } from "./types.ts";
 import { errorOf } from "./errors.ts";
 import {
-  buildingOf, defaultState, footprint, instanceCells, instanceShape, isEnabled, isPermutation,
-  nextColor, nid, normalizeState, occupantAt,
+  boardOf, buildingOf, defaultState, emptyBoards, footprint, instanceCells, instanceShape, isEnabled, isPermutation,
+  nextColor, nid, normalizeState, occupantAt, validEdge,
 } from "./rules.ts";
 
 export type ApplyResult =
   | { ok: true; state: State; placedId?: string; removedId?: string }
   | { ok: false; error: AppError };
 
-function fail(code: string, message?: string, cells?: { r: number; c: number }[]): ApplyResult {
+function fail(code: string, message?: string, cells?: { board?: number; r: number; c: number }[]): ApplyResult {
   return { ok: false, error: errorOf(code, message, cells) };
 }
 
-function clips(state: State, rows: number, cols: number, holes: { r: number; c: number }[]): boolean {
+function boardClipped(state: State, board: number, rows: number, cols: number, holes: { r: number; c: number }[]): boolean {
   const holeKeys = new Set(holes.map(h => h.r + "," + h.c));
   for (const inst of state.instances) {
+    if (inst.board !== board) continue;
     const b = buildingOf(state, inst.typeId);
     if (!b) return true;
     const shape = instanceShape(b, inst.rotated);
@@ -35,9 +36,15 @@ export function apply(state: State, command: UserCommand & { reason?: string; so
     case "demolish":
       return demolish(state, command);
     case "setSize":
-      return setSize(state, command.rows, command.cols);
+      return setSize(state, command.board, command.rows, command.cols);
     case "setHole":
-      return setHole(state, command.r, command.c, command.disabled);
+      return setHole(state, command.board, command.r, command.c, command.disabled);
+    case "addBoard":
+      return addBoard(state, command.rows, command.cols);
+    case "removeBoard":
+      return removeBoard(state, command.board);
+    case "resetBoard":
+      return resetBoard(state);
     case "addBuilding":
       return addBuilding(state, command);
     case "updateBuilding":
@@ -67,20 +74,22 @@ export function apply(state: State, command: UserCommand & { reason?: string; so
   }
 }
 
-function place(state: State, command: { typeId: string; anchorR: number; anchorC: number; rotated?: boolean; reason?: string; source?: "user" | "mcp" }): ApplyResult {
+function place(state: State, command: { typeId: string; board: number; anchorR: number; anchorC: number; rotated?: boolean; reason?: string; source?: "user" | "mcp" }): ApplyResult {
   if (command.source === "mcp" && !command.reason?.trim()) return fail("missing_reason");
   const b = buildingOf(state, command.typeId);
   if (!b) return fail("unknown_type");
+  if (!boardOf(state, command.board)) return fail("unknown_board");
   if (!Number.isInteger(command.anchorR) || !Number.isInteger(command.anchorC)) return fail("out_of_bounds");
   const rotated = command.rotated === true && b.w * b.h === 2;
   const shape = instanceShape(b, rotated);
-  const cells = footprint(command.anchorR, command.anchorC, shape.w, shape.h);
+  const cells = footprint(command.anchorR, command.anchorC, shape.w, shape.h).map(cell => ({ board: command.board, ...cell }));
   for (const cell of cells) {
-    if (!Number.isInteger(cell.r) || cell.r < 1 || cell.c < 1 || cell.r > state.rows || cell.c > state.cols) {
+    if (!isEnabled(state, command.board, cell.r, cell.c) && !inRect(state, command.board, cell.r, cell.c)) {
       return fail("out_of_bounds", undefined, cells);
     }
-    if (!isEnabled(state, cell.r, cell.c)) return fail("disabled_cell", undefined, cells);
-    if (occupantAt(state, cell.r, cell.c)) return fail("occupied", undefined, cells);
+    if (!inRect(state, command.board, cell.r, cell.c)) return fail("out_of_bounds", undefined, cells);
+    if (!isEnabled(state, command.board, cell.r, cell.c)) return fail("disabled_cell", undefined, cells);
+    if (occupantAt(state, command.board, cell.r, cell.c)) return fail("occupied", undefined, cells);
   }
   const id = nid("i");
   const paid = b.cost;
@@ -89,16 +98,31 @@ function place(state: State, command: { typeId: string; anchorR: number; anchorC
     placedId: id,
     state: {
       ...state,
-      instances: [...state.instances, { id, typeId: b.id, anchorR: command.anchorR, anchorC: command.anchorC, paid, ...(rotated ? { rotated: true } : {}) }],
+      instances: [...state.instances, {
+        id,
+        typeId: b.id,
+        board: command.board,
+        anchorR: command.anchorR,
+        anchorC: command.anchorC,
+        paid,
+        ...(rotated ? { rotated: true } : {}),
+      }],
       spent: state.spent + paid,
       spendLog: [...state.spendLog, { instanceId: id, typeId: b.id, paid, at: Date.now() }],
     },
   };
 }
 
-function demolish(state: State, command: { r: number; c: number; reason?: string; source?: "user" | "mcp" }): ApplyResult {
+function inRect(state: State, board: number, r: number, c: number): boolean {
+  const found = boardOf(state, board);
+  if (!found) return false;
+  return Number.isInteger(r) && Number.isInteger(c) && r >= 1 && c >= 1 && r <= found.rows && c <= found.cols;
+}
+
+function demolish(state: State, command: { board: number; r: number; c: number; reason?: string; source?: "user" | "mcp" }): ApplyResult {
   if (command.source === "mcp" && !command.reason?.trim()) return fail("missing_reason");
-  const inst = occupantAt(state, command.r, command.c);
+  if (!boardOf(state, command.board)) return fail("unknown_board");
+  const inst = occupantAt(state, command.board, command.r, command.c);
   if (!inst) return fail("empty_cell");
   return {
     ok: true,
@@ -107,23 +131,58 @@ function demolish(state: State, command: { r: number; c: number; reason?: string
   };
 }
 
-function setSize(state: State, rows: number, cols: number): ApplyResult {
-  if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 2 || rows > 6 || cols < 2 || cols > 6) {
-    return fail("bad_size");
-  }
-  const holes = state.holes.filter(h => h.r <= rows && h.c <= cols);
-  if (clips(state, rows, cols, holes)) return fail("clipped", "缩小后会切到已经放好的建筑，先拆除再改。");
-  return { ok: true, state: { ...state, rows, cols, holes } };
+function setSize(state: State, board: number, rows: number, cols: number): ApplyResult {
+  const found = boardOf(state, board);
+  if (!found) return fail("unknown_board");
+  if (!validEdge(rows) || !validEdge(cols)) return fail("bad_size");
+  const holes = found.holes.filter(h => h.r <= rows && h.c <= cols);
+  if (boardClipped(state, board, rows, cols, holes)) return fail("clipped", "缩小后会切到已经放好的建筑，先拆除再改。");
+  const boards = state.boards.map((item, index) => index + 1 === board ? { rows, cols, holes } : item);
+  return { ok: true, state: { ...state, boards } };
 }
 
-function setHole(state: State, r: number, c: number, disabled: boolean): ApplyResult {
-  if (r < 1 || c < 1 || r > state.rows || c > state.cols) return fail("out_of_bounds");
-  const holes = state.holes.filter(h => !(h.r === r && h.c === c));
+function setHole(state: State, board: number, r: number, c: number, disabled: boolean): ApplyResult {
+  const found = boardOf(state, board);
+  if (!found) return fail("unknown_board");
+  if (r < 1 || c < 1 || r > found.rows || c > found.cols) return fail("out_of_bounds");
+  const holes = found.holes.filter(h => !(h.r === r && h.c === c));
   if (disabled) holes.push({ r, c });
-  if (clips(state, state.rows, state.cols, holes)) {
+  if (boardClipped(state, board, found.rows, found.cols, holes)) {
     return fail("clipped", "这个格子上有建筑，先拆除再禁用。");
   }
-  return { ok: true, state: { ...state, holes } };
+  const boards = state.boards.map((item, index) => index + 1 === board ? { ...item, holes } : item);
+  return { ok: true, state: { ...state, boards } };
+}
+
+function addBoard(state: State, rows: number, cols: number): ApplyResult {
+  if (state.boards.length >= MAX_BOARDS) return fail("too_many_boards");
+  if (!validEdge(rows) || !validEdge(cols)) return fail("bad_size");
+  const board: Board = { rows, cols, holes: [] };
+  return { ok: true, state: { ...state, boards: [...state.boards, board] } };
+}
+
+function removeBoard(state: State, board: number): ApplyResult {
+  if (!boardOf(state, board)) return fail("unknown_board");
+  if (state.boards.length <= 1) return fail("last_board");
+  if (state.instances.some(inst => inst.board === board)) {
+    return fail("clipped", "这块棋盘上还有建筑，先拆除再删除。");
+  }
+  const boards = state.boards.filter((_, index) => index + 1 !== board);
+  const instances = state.instances.map(inst => inst.board > board ? { ...inst, board: inst.board - 1 } : inst);
+  return { ok: true, state: { ...state, boards, instances } };
+}
+
+function resetBoard(state: State): ApplyResult {
+  return {
+    ok: true,
+    state: {
+      ...state,
+      boards: emptyBoards(),
+      instances: [],
+      spent: 0,
+      spendLog: [],
+    },
+  };
 }
 
 function cleanName(name: string): string | null {
@@ -226,8 +285,8 @@ function streetTypesOk(state: State, types: string[]): boolean {
   return types.length === 3 && types.every(t => state.buildings.some(b => b.id === t));
 }
 
-export function placementBlocked(state: State, r: number, c: number): AppError | null {
-  const inst = occupantAt(state, r, c);
+export function placementBlocked(state: State, board: number, r: number, c: number): AppError | null {
+  const inst = occupantAt(state, board, r, c);
   if (!inst) return null;
   const b = buildingOf(state, inst.typeId);
   return errorOf("occupied", (b ? b.name : "建筑") + " 占着这块地。", instanceCells(state, inst));

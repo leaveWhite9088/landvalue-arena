@@ -1,9 +1,9 @@
 import { clear, el } from "./dom.ts";
-import { fmtNum, OBJECTIVE_META, shapeLabel, type Objective, type SaveMeta, type UserCommand, type ViewModel } from "../shared/types.ts";
+import { fmtNum, MAX_BOARDS, MAX_EDGE, MIN_EDGE, OBJECTIVE_META, shapeLabel, type Objective, type SaveMeta, type UserCommand, type ViewModel } from "../shared/types.ts";
 
 export class Modal {
   private tab = "board";
-  private confirming: "clear" | "reset" | null = null;
+  private confirming: "clear" | "reset" | "resetBoard" | null = null;
   private view: ViewModel | null = null;
   private saves: SaveMeta[] = [];
 
@@ -64,32 +64,73 @@ export class Modal {
   }
 
   private paintBoard(panel: HTMLElement, view: ViewModel) {
-    const row = el("div", "row");
-    const rows = el("input") as HTMLInputElement;
-    rows.type = "number";
-    rows.min = "2";
-    rows.max = "6";
-    rows.value = String(view.rows);
-    const cols = el("input") as HTMLInputElement;
-    cols.type = "number";
-    cols.min = "2";
-    cols.max = "6";
-    cols.value = String(view.cols);
-    const apply = el("button", "btn", "应用尺寸");
-    apply.type = "button";
-    apply.addEventListener("click", () => this.send({ type: "setSize", rows: Number(rows.value), cols: Number(cols.value) }));
-    row.append(field("行", rows), field("列", cols), apply);
-    panel.append(row, el("p", "hint", "点一格切换启用。格子上有建筑时不能禁用。"));
-    const grid = el("div", "board-edit");
-    grid.style.gridTemplateColumns = "repeat(" + view.cols + ", 36px)";
-    for (const cell of view.cells) {
-      const btn = el("button", "hole-cell" + (cell.enabled ? "" : " off"));
-      btn.type = "button";
-      btn.title = cell.enabled ? "禁用第 " + cell.r + " 行第 " + cell.c + " 列" : "启用这一格";
-      btn.addEventListener("click", () => this.send({ type: "setHole", r: cell.r, c: cell.c, disabled: cell.enabled }));
-      grid.append(btn);
+    panel.append(el("p", "hint", "最多 " + MAX_BOARDS + " 块。每块尺寸独立，记作 行×列。光环和专业街不跨棋盘。删除中间一块会把后面的编号前移。"));
+    for (const board of view.boards) {
+      const block = el("section", "board-block");
+      const head = el("div", "row");
+      head.append(el("strong", undefined, "棋盘 " + board.board + "  " + board.rows + "×" + board.cols));
+      if (view.boards.length > 1) {
+        const remove = el("button", "text-btn danger", "删除这块");
+        remove.type = "button";
+        remove.addEventListener("click", () => this.send({ type: "removeBoard", board: board.board }));
+        head.append(remove);
+      }
+      const rows = el("input") as HTMLInputElement;
+      rows.type = "number";
+      rows.min = String(MIN_EDGE);
+      rows.max = String(MAX_EDGE);
+      rows.value = String(board.rows);
+      const cols = el("input") as HTMLInputElement;
+      cols.type = "number";
+      cols.min = String(MIN_EDGE);
+      cols.max = String(MAX_EDGE);
+      cols.value = String(board.cols);
+      const apply = el("button", "btn", "应用尺寸");
+      apply.type = "button";
+      apply.addEventListener("click", () => this.send({ type: "setSize", board: board.board, rows: Number(rows.value), cols: Number(cols.value) }));
+      const size = el("div", "row");
+      size.append(field("行", rows), field("列", cols), apply);
+      block.append(head, size);
+      const cells = view.cells.filter(cell => cell.board === board.board);
+      const grid = el("div", "board-edit");
+      grid.style.gridTemplateColumns = "repeat(" + board.cols + ", 28px)";
+      for (const cell of cells) {
+        const btn = el("button", "hole-cell" + (cell.enabled ? "" : " off"));
+        btn.type = "button";
+        btn.title = cell.enabled ? "禁用棋盘 " + board.board + " 第 " + cell.r + " 行第 " + cell.c + " 列" : "启用这一格";
+        btn.addEventListener("click", () => this.send({ type: "setHole", board: board.board, r: cell.r, c: cell.c, disabled: cell.enabled }));
+        grid.append(btn);
+      }
+      block.append(grid);
+      panel.append(block);
     }
-    panel.append(grid);
+    if (view.boards.length < MAX_BOARDS) {
+      const rows = el("input") as HTMLInputElement;
+      rows.type = "number";
+      rows.min = String(MIN_EDGE);
+      rows.max = String(MAX_EDGE);
+      rows.value = "4";
+      const cols = el("input") as HTMLInputElement;
+      cols.type = "number";
+      cols.min = String(MIN_EDGE);
+      cols.max = String(MAX_EDGE);
+      cols.value = "4";
+      const add = el("button", "btn", "添加棋盘");
+      add.type = "button";
+      add.addEventListener("click", () => this.send({ type: "addBoard", rows: Number(rows.value), cols: Number(cols.value) }));
+      const row = el("div", "row");
+      row.append(field("新棋盘行", rows), field("列", cols), add);
+      panel.append(row);
+    }
+    const reset = el("button", "ghost", this.confirming === "resetBoard" ? "确认重置棋盘" : "重置棋盘");
+    reset.type = "button";
+    reset.addEventListener("click", () => {
+      if (this.confirming !== "resetBoard") { this.confirming = "resetBoard"; this.paint(false); return; }
+      this.confirming = null;
+      this.send({ type: "resetBoard" });
+    });
+    panel.append(el("p", "hint", "重置棋盘会清空场上建筑和花费，并把棋盘恢复成默认的四块：3×3、4×4、3×4、5×5。建筑表、专业街和优先级不动。"));
+    panel.append(reset);
   }
 
   private paintPriority(panel: HTMLElement, view: ViewModel) {

@@ -1,6 +1,6 @@
 import {
-  BASE_PRICE, OBJECTIVE_META, OBJECTIVES, PALETTE,
-  type AppError, type Building, type Cell, type CellView, type FormationView,
+  BASE_PRICE, DEFAULT_BOARDS, MAP_NOTES, MAX_BOARDS, MAX_EDGE, MIN_EDGE, OBJECTIVE_META, OBJECTIVES, PALETTE,
+  type AppError, type Board, type Building, type Cell, type CellView, type Coord, type FormationView,
   type Instance, type InstanceView, type LedgerLine, type MapSummary, type Objective,
   type State, type Stats, type Street, type ViewModel,
   cellKey, fmtNum, isShape, round1,
@@ -15,12 +15,16 @@ export function footprint(anchorR: number, anchorC: number, w: number, h: number
   return cells;
 }
 
-export function holeSet(state: State): Set<string> {
-  return new Set(state.holes.map(h => cellKey(h.r, h.c)));
+export function boardOf(state: State, board: number): Board | undefined {
+  if (!Number.isInteger(board) || board < 1 || board > state.boards.length) return undefined;
+  return state.boards[board - 1];
 }
 
-export function isEnabled(state: State, r: number, c: number, holes = holeSet(state)): boolean {
-  return r >= 1 && c >= 1 && r <= state.rows && c <= state.cols && !holes.has(cellKey(r, c));
+export function isEnabled(state: State, board: number, r: number, c: number): boolean {
+  const b = boardOf(state, board);
+  if (!b) return false;
+  if (r < 1 || c < 1 || r > b.rows || c > b.cols) return false;
+  return !b.holes.some(h => h.r === r && h.c === c);
 }
 
 export function buildingOf(state: State, id: string): Building | undefined {
@@ -33,15 +37,16 @@ export function instanceShape(b: Building, rotated: boolean | undefined): { w: n
   return { w: b.w, h: b.h };
 }
 
-export function instanceCells(state: State, inst: Instance): Cell[] {
+export function instanceCells(state: State, inst: Instance): Coord[] {
   const b = buildingOf(state, inst.typeId);
   if (!b) return [];
   const { w, h } = instanceShape(b, inst.rotated);
-  return footprint(inst.anchorR, inst.anchorC, w, h);
+  return footprint(inst.anchorR, inst.anchorC, w, h).map(cell => ({ board: inst.board, r: cell.r, c: cell.c }));
 }
 
-export function occupantAt(state: State, r: number, c: number): Instance | undefined {
+export function occupantAt(state: State, board: number, r: number, c: number): Instance | undefined {
   for (const inst of state.instances) {
+    if (inst.board !== board) continue;
     if (instanceCells(state, inst).some(cell => cell.r === r && cell.c === c)) return inst;
   }
   return undefined;
@@ -53,45 +58,46 @@ export function innatePctOf(w: number, h: number): number {
   return area >= 4 ? 30 : area === 2 ? 20 : 10;
 }
 
-export function auraCells(state: State, inst: Instance): Cell[] {
+export function auraCells(state: State, inst: Instance): Coord[] {
   const owned = instanceCells(state, inst);
-  const holes = holeSet(state);
   const seen = new Set<string>();
-  const out: Cell[] = [];
+  const out: Coord[] = [];
   for (const cell of owned) {
     for (let dr = -1; dr <= 1; dr++) {
       for (let dc = -1; dc <= 1; dc++) {
         const r = cell.r + dr;
         const c = cell.c + dc;
-        const k = cellKey(r, c);
-        if (seen.has(k) || !isEnabled(state, r, c, holes)) continue;
+        if (!isEnabled(state, inst.board, r, c)) continue;
+        const k = cellKey(inst.board, r, c);
+        if (seen.has(k)) continue;
         seen.add(k);
-        out.push({ r, c });
+        out.push({ board: inst.board, r, c });
       }
     }
   }
   return out;
 }
 
-export function surroundCells(state: State, inst: Instance): Cell[] {
-  const owned = new Set(instanceCells(state, inst).map(cell => cellKey(cell.r, cell.c)));
-  return auraCells(state, inst).filter(cell => !owned.has(cellKey(cell.r, cell.c)));
+export function surroundCells(state: State, inst: Instance): Coord[] {
+  const owned = new Set(instanceCells(state, inst).map(cell => cellKey(cell.board, cell.r, cell.c)));
+  return auraCells(state, inst).filter(cell => !owned.has(cellKey(cell.board, cell.r, cell.c)));
 }
 
 function chebyshev(a: Cell, b: Cell): number {
   return Math.max(Math.abs(a.r - b.r), Math.abs(a.c - b.c));
 }
 
-function instancesTouch(a: Cell[], b: Cell[]): boolean {
+function instancesTouch(a: Coord[], b: Coord[]): boolean {
+  if (!a.length || !b.length || a[0].board !== b[0].board) return false;
   for (const ca of a) for (const cb of b) if (chebyshev(ca, cb) === 1) return true;
   return false;
 }
 
-export type Formation = { streetId: string; instanceIds: string[] };
+export type Formation = { streetId: string; board: number; instanceIds: string[] };
 
 export function findFormations(state: State): Formation[] {
   const formations: Formation[] = [];
-  const cellCache = new Map<string, Cell[]>();
+  const cellCache = new Map<string, Coord[]>();
   const cellsOf = (inst: Instance) => {
     let cells = cellCache.get(inst.id);
     if (!cells) {
@@ -106,36 +112,45 @@ export function findFormations(state: State): Formation[] {
     const need: Record<string, number> = {};
     for (const t of street.types) need[t] = (need[t] || 0) + 1;
     const typeSet = new Set(street.types);
-    const cand = state.instances.filter(inst => typeSet.has(inst.typeId));
-    const seen = new Set<string>();
-    for (const start of cand) {
-      if (seen.has(start.id)) continue;
-      const comp: Instance[] = [];
-      const queue = [start];
-      seen.add(start.id);
-      while (queue.length) {
-        const cur = queue.pop()!;
-        comp.push(cur);
-        const curCells = cellsOf(cur);
-        for (const other of cand) {
-          if (seen.has(other.id)) continue;
-          if (instancesTouch(curCells, cellsOf(other))) {
-            seen.add(other.id);
-            queue.push(other);
+    const byBoard = new Map<number, Instance[]>();
+    for (const inst of state.instances) {
+      if (!typeSet.has(inst.typeId)) continue;
+      const list = byBoard.get(inst.board) ?? [];
+      list.push(inst);
+      byBoard.set(inst.board, list);
+    }
+    for (const [board, cand] of byBoard) {
+      const seen = new Set<string>();
+      for (const start of cand) {
+        if (seen.has(start.id)) continue;
+        const comp: Instance[] = [];
+        const queue = [start];
+        seen.add(start.id);
+        while (queue.length) {
+          const cur = queue.pop()!;
+          comp.push(cur);
+          const curCells = cellsOf(cur);
+          for (const other of cand) {
+            if (seen.has(other.id)) continue;
+            if (instancesTouch(curCells, cellsOf(other))) {
+              seen.add(other.id);
+              queue.push(other);
+            }
           }
         }
-      }
-      const count: Record<string, number> = {};
-      for (const inst of comp) count[inst.typeId] = (count[inst.typeId] || 0) + 1;
-      let ok = true;
-      for (const t of Object.keys(need)) {
-        if ((count[t] || 0) < need[t]) { ok = false; break; }
-      }
-      if (ok) {
-        formations.push({
-          streetId: street.id,
-          instanceIds: comp.map(i => i.id).sort(),
-        });
+        const count: Record<string, number> = {};
+        for (const inst of comp) count[inst.typeId] = (count[inst.typeId] || 0) + 1;
+        let ok = true;
+        for (const t of Object.keys(need)) {
+          if ((count[t] || 0) < need[t]) { ok = false; break; }
+        }
+        if (ok) {
+          formations.push({
+            streetId: street.id,
+            board,
+            instanceIds: comp.map(i => i.id).sort(),
+          });
+        }
       }
     }
   }
@@ -152,23 +167,24 @@ export function computePrices(state: State, formations = findFormations(state)):
 } {
   const prices: Record<string, number> = {};
   const ledger: Record<string, LedgerLine[]> = {};
-  const holes = holeSet(state);
-  for (let r = 1; r <= state.rows; r++) {
-    for (let c = 1; c <= state.cols; c++) {
-      if (!isEnabled(state, r, c, holes)) continue;
-      const k = cellKey(r, c);
-      prices[k] = BASE_PRICE;
-      ledger[k] = [];
+  state.boards.forEach((board, index) => {
+    const n = index + 1;
+    for (let r = 1; r <= board.rows; r++) {
+      for (let c = 1; c <= board.cols; c++) {
+        if (!isEnabled(state, n, r, c)) continue;
+        const k = cellKey(n, r, c);
+        prices[k] = BASE_PRICE;
+        ledger[k] = [];
+      }
     }
-  }
+  });
   const byId = new Map(state.instances.map(i => [i.id, i]));
   for (const inst of state.instances) {
     const b = buildingOf(state, inst.typeId);
     const pct = innatePctOf(b?.w ?? 1, b?.h ?? 1);
-    const label = (b ? b.name : "建筑") + " @ (" + inst.anchorR + "," + inst.anchorC + ")  固有";
-    // 自身占地和周围都吃这一笔，每座只乘一次
+    const label = (b ? b.name : "建筑") + " @ 棋盘" + inst.board + " (" + inst.anchorR + "," + inst.anchorC + ")  固有";
     for (const cell of auraCells(state, inst)) {
-      const k = cellKey(cell.r, cell.c);
+      const k = cellKey(cell.board, cell.r, cell.c);
       if (prices[k] === undefined) continue;
       prices[k] *= 1 + pct / 100;
       ledger[k].push({ label, pct });
@@ -183,7 +199,7 @@ export function computePrices(state: State, formations = findFormations(state)):
     for (const id of f.instanceIds) {
       const inst = byId.get(id);
       if (!inst) continue;
-      for (const cell of auraCells(state, inst)) covered.add(cellKey(cell.r, cell.c));
+      for (const cell of auraCells(state, inst)) covered.add(cellKey(cell.board, cell.r, cell.c));
     }
     const mult = 1 + street.pct / 100;
     const label = street.name;
@@ -230,27 +246,29 @@ export function buildView(state: State): ViewModel {
   const formations = findFormations(state);
   const { prices, ledger } = computePrices(state, formations);
   const stats = computeStats(state, prices);
-  const holes = holeSet(state);
   const occ = new Map<string, string>();
   for (const inst of state.instances) {
-    for (const cell of instanceCells(state, inst)) occ.set(cellKey(cell.r, cell.c), inst.id);
+    for (const cell of instanceCells(state, inst)) occ.set(cellKey(cell.board, cell.r, cell.c), inst.id);
   }
   const cells: CellView[] = [];
   const ledgerView: ViewModel["ledger"] = [];
-  for (let r = 1; r <= state.rows; r++) {
-    for (let c = 1; c <= state.cols; c++) {
-      const enabled = isEnabled(state, r, c, holes);
-      const k = cellKey(r, c);
-      const exact = enabled ? prices[k] : 0;
-      cells.push({
-        r, c, enabled,
-        price: enabled ? round1(exact) : 0,
-        priceExact: exact,
-        instanceId: occ.get(k) ?? null,
-      });
-      if (enabled) ledgerView.push({ r, c, lines: ledger[k] ?? [] });
+  state.boards.forEach((board, index) => {
+    const n = index + 1;
+    for (let r = 1; r <= board.rows; r++) {
+      for (let c = 1; c <= board.cols; c++) {
+        const enabled = isEnabled(state, n, r, c);
+        const k = cellKey(n, r, c);
+        const exact = enabled ? prices[k] : 0;
+        cells.push({
+          board: n, r, c, enabled,
+          price: enabled ? round1(exact) : 0,
+          priceExact: exact,
+          instanceId: occ.get(k) ?? null,
+        });
+        if (enabled) ledgerView.push({ board: n, r, c, lines: ledger[k] ?? [] });
+      }
     }
-  }
+  });
   const instances: InstanceView[] = state.instances.map(inst => {
     const b = buildingOf(state, inst.typeId);
     const shape = b ? instanceShape(b, inst.rotated) : { w: 1, h: 1 };
@@ -261,6 +279,7 @@ export function buildView(state: State): ViewModel {
       color: b?.color ?? "#888888",
       w: shape.w,
       h: shape.h,
+      board: inst.board,
       anchorR: inst.anchorR,
       anchorC: inst.anchorC,
       cells: instanceCells(state, inst),
@@ -274,12 +293,12 @@ export function buildView(state: State): ViewModel {
       streetId: f.streetId,
       name: street?.name ?? "专业街",
       pct: street?.pct ?? 0,
+      board: f.board,
       instanceIds: f.instanceIds,
     };
   });
   return {
-    rows: state.rows,
-    cols: state.cols,
+    boards: state.boards.map((board, index) => ({ board: index + 1, rows: board.rows, cols: board.cols })),
     cells,
     instances,
     formations: formationViews,
@@ -295,19 +314,24 @@ export function buildView(state: State): ViewModel {
 export function toMapSummary(view: ViewModel): MapSummary {
   const shown = displayStats(view.stats);
   return {
-    rows: view.rows,
-    cols: view.cols,
-    disabled: view.cells.filter(c => !c.enabled).map(c => ({ r: c.r, c: c.c })),
-    instances: view.instances.map(inst => ({
-      instanceId: inst.id,
-      typeId: inst.typeId,
-      name: inst.name,
-      w: inst.w,
-      h: inst.h,
-      anchor: { r: inst.anchorR, c: inst.anchorC },
-      cells: inst.cells,
+    notes: MAP_NOTES,
+    boards: view.boards.map(board => ({
+      board: board.board,
+      rows: board.rows,
+      cols: board.cols,
+      disabled: view.cells.filter(c => c.board === board.board && !c.enabled).map(c => ({ r: c.r, c: c.c })),
+      instances: view.instances.filter(inst => inst.board === board.board).map(inst => ({
+        instanceId: inst.id,
+        typeId: inst.typeId,
+        name: inst.name,
+        w: inst.w,
+        h: inst.h,
+        rotated: inst.rotated,
+        anchor: { r: inst.anchorR, c: inst.anchorC },
+        cells: inst.cells.map(c => ({ r: c.r, c: c.c })),
+      })),
+      prices: view.cells.filter(c => c.board === board.board && c.enabled).map(c => ({ r: c.r, c: c.c, price: c.price })),
     })),
-    prices: view.cells.filter(c => c.enabled).map(c => ({ r: c.r, c: c.c, price: c.price })),
     formations: view.formations,
     spent: view.spent,
     stats: {
@@ -316,8 +340,30 @@ export function toMapSummary(view: ViewModel): MapSummary {
       repeat: shown.repeat,
       placed: shown.placed,
       cells: shown.cells,
+      covered: shown.covered,
     },
   };
+}
+
+export function duplicateLabel(state: State): string {
+  const counts = new Map<string, number>();
+  for (const inst of state.instances) counts.set(inst.typeId, (counts.get(inst.typeId) ?? 0) + 1);
+  const parts: string[] = [];
+  for (const [id, n] of counts) {
+    if (n < 2) continue;
+    parts.push((buildingOf(state, id)?.name ?? id) + "×" + n);
+  }
+  return parts.length ? "（" + parts.join("、") + "）" : "";
+}
+
+export function formatSnapshot(state: State): string {
+  const view = buildView(state);
+  const s = displayStats(view.stats);
+  return "总地价 " + fmtNum(s.total)
+    + " · 最高地价 " + fmtNum(s.max)
+    + " · 重复建筑 " + s.repeat + duplicateLabel(state)
+    + " · 花费 " + s.spent
+    + " · 占地 " + s.covered + "/" + s.cells;
 }
 
 export function fmtDelta(n: number): string {
@@ -427,12 +473,18 @@ const STREET_DEFS: [id: string, name: string, types: [string, string, string], p
   ["s_flagship", "旗舰大街", ["b_benz", "b_zara", "b_jiajuguan"], 55],
 ];
 
+export function validEdge(n: number): boolean {
+  return Number.isInteger(n) && n >= MIN_EDGE && n <= MAX_EDGE;
+}
+
+export function emptyBoards(specs = DEFAULT_BOARDS): Board[] {
+  return specs.map(spec => ({ rows: spec.rows, cols: spec.cols, holes: [] }));
+}
+
 export function defaultState(): State {
   return {
-    version: 2,
-    rows: 6,
-    cols: 6,
-    holes: [],
+    version: 3,
+    boards: emptyBoards(),
     buildings: SHOP_DEFS.map((def, i) => shop(def, i)),
     streets: STREET_DEFS.map(([id, name, types, pct]) => ({ id, name, types, pct })),
     instances: [],
@@ -450,9 +502,18 @@ function isCell(v: unknown): v is Cell {
 
 export function normalizeState(raw: unknown): State | null {
   if (!raw || typeof raw !== "object") return null;
-  const s = raw as Partial<State>;
-  if (!Number.isInteger(s.rows) || !Number.isInteger(s.cols)) return null;
-  if ((s.rows as number) < 2 || (s.rows as number) > 6 || (s.cols as number) < 2 || (s.cols as number) > 6) return null;
+  const s = raw as {
+    rows?: number;
+    cols?: number;
+    holes?: unknown;
+    boards?: unknown;
+    buildings?: unknown;
+    streets?: unknown;
+    instances?: unknown;
+    spent?: number;
+    spendLog?: unknown;
+    priorities?: unknown;
+  };
   if (!Array.isArray(s.buildings) || !Array.isArray(s.streets) || !Array.isArray(s.instances)) return null;
 
   const buildings: Building[] = [];
@@ -477,17 +538,17 @@ export function normalizeState(raw: unknown): State | null {
   for (const st of s.streets) {
     if (!st || typeof st.id !== "string" || typeof st.name !== "string") return null;
     if (!Array.isArray(st.types) || st.types.length !== 3) return null;
-    if (!st.types.every(t => typeof t === "string")) return null;
+    if (!st.types.every((t: unknown) => typeof t === "string")) return null;
     if (typeof st.pct !== "number" || !(st.pct > 0)) return null;
     streets.push({ id: st.id, name: st.name.trim(), types: [st.types[0], st.types[1], st.types[2]], pct: st.pct });
   }
 
-  const holes = Array.isArray(s.holes) ? s.holes.filter(isCell) : [];
+  const boards = readBoards(s);
+  if (!boards) return null;
+
   const state: State = {
-    version: 2,
-    rows: s.rows as number,
-    cols: s.cols as number,
-    holes: holes.filter(h => h.r >= 1 && h.c >= 1 && h.r <= (s.rows as number) && h.c <= (s.cols as number)),
+    version: 3,
+    boards,
     buildings,
     streets,
     instances: [],
@@ -502,19 +563,22 @@ export function normalizeState(raw: unknown): State | null {
     if (!ids.has(inst.typeId)) return null;
     if (!Number.isInteger(inst.anchorR) || !Number.isInteger(inst.anchorC)) return null;
     if (!Number.isInteger(inst.paid) || inst.paid < 0) return null;
+    const board = Number.isInteger(inst.board) ? inst.board : boards.length === 1 ? 1 : 0;
+    if (!boardOf(state, board)) return null;
     const b = buildings.find(x => x.id === inst.typeId)!;
     const rotated = inst.rotated === true && b.w * b.h === 2;
     const shape = instanceShape(b, rotated);
     const cells = footprint(inst.anchorR, inst.anchorC, shape.w, shape.h);
     for (const cell of cells) {
-      if (!isEnabled(state, cell.r, cell.c)) return null;
-      const k = cellKey(cell.r, cell.c);
+      if (!isEnabled(state, board, cell.r, cell.c)) return null;
+      const k = cellKey(board, cell.r, cell.c);
       if (occupied.has(k)) return null;
       occupied.add(k);
     }
     state.instances.push({
       id: inst.id,
       typeId: inst.typeId,
+      board,
       anchorR: inst.anchorR,
       anchorC: inst.anchorC,
       paid: inst.paid,
@@ -544,6 +608,30 @@ export function normalizeState(raw: unknown): State | null {
   return state;
 }
 
+function readBoards(s: { rows?: number; cols?: number; holes?: unknown; boards?: unknown }): Board[] | null {
+  if (Array.isArray(s.boards)) {
+    if (s.boards.length < 1 || s.boards.length > MAX_BOARDS) return null;
+    const boards: Board[] = [];
+    for (const raw of s.boards) {
+      if (!raw || !validEdge(raw.rows) || !validEdge(raw.cols)) return null;
+      const holes = Array.isArray(raw.holes) ? raw.holes.filter(isCell) : [];
+      boards.push({
+        rows: raw.rows,
+        cols: raw.cols,
+        holes: holes.filter((h: Cell) => h.r >= 1 && h.c >= 1 && h.r <= raw.rows && h.c <= raw.cols),
+      });
+    }
+    return boards;
+  }
+  if (!validEdge(s.rows as number) || !validEdge(s.cols as number)) return null;
+  const holes = Array.isArray(s.holes) ? s.holes.filter(isCell) : [];
+  return [{
+    rows: s.rows as number,
+    cols: s.cols as number,
+    holes: holes.filter(h => h.r >= 1 && h.c >= 1 && h.r <= (s.rows as number) && h.c <= (s.cols as number)),
+  }];
+}
+
 export function isPermutation(list: unknown): list is Objective[] {
   if (!Array.isArray(list) || list.length !== 4) return false;
   const set = new Set(list);
@@ -564,18 +652,19 @@ export function compareSchemes(a: Scheme, b: Scheme, priorities: Objective[]): n
   return 0;
 }
 
-export function previewPlacement(view: ViewModel, typeId: string, anchorR: number, anchorC: number, rotated = false): {
+export function previewPlacement(view: ViewModel, typeId: string, board: number, anchorR: number, anchorC: number, rotated = false): {
   ok: boolean;
-  cells: Cell[];
+  cells: Coord[];
   error?: AppError;
 } {
   const b = view.buildings.find(x => x.id === typeId);
   if (!b) return { ok: false, cells: [], error: errorOf("unknown_type") };
+  if (!view.boards.some(item => item.board === board)) return { ok: false, cells: [], error: errorOf("unknown_board") };
   const { w, h } = instanceShape(b, rotated);
-  const cells = footprint(anchorR, anchorC, w, h);
-  const byKey = new Map(view.cells.map(c => [cellKey(c.r, c.c), c]));
+  const cells = footprint(anchorR, anchorC, w, h).map(cell => ({ board, r: cell.r, c: cell.c }));
+  const byKey = new Map(view.cells.map(c => [cellKey(c.board, c.r, c.c), c]));
   for (const cell of cells) {
-    const found = byKey.get(cellKey(cell.r, cell.c));
+    const found = byKey.get(cellKey(cell.board, cell.r, cell.c));
     if (!found) return { ok: false, cells, error: errorOf("out_of_bounds", undefined, cells) };
     if (!found.enabled) return { ok: false, cells, error: errorOf("disabled_cell", undefined, cells) };
     if (found.instanceId) return { ok: false, cells, error: errorOf("occupied", undefined, cells) };

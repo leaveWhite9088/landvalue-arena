@@ -1,5 +1,5 @@
 import { clear, el } from "./dom.ts";
-import type { KanbanEvent, ViewModel } from "../shared/types.ts";
+import type { Coord, KanbanEvent, ViewModel } from "../shared/types.ts";
 import { fmtNum, shapeLabel } from "../shared/types.ts";
 
 export type UiState = {
@@ -47,7 +47,7 @@ export class UI {
     }
   }
 
-  placeHover(view: ViewModel, cell: { r: number; c: number } | null, x: number, y: number, pinned: boolean) {
+  placeHover(view: ViewModel, cell: Coord | null, x: number, y: number, pinned: boolean) {
     if (pinned) return;
     if (!cell) {
       this.hover.hidden = true;
@@ -150,11 +150,14 @@ export class UI {
         card.append(el("strong", undefined, event.canScrub ? stepNo + "  " + event.headline : event.headline));
         if (event.reason) card.append(el("p", "reason", event.reason));
         if (event.detail) card.append(el("p", "detail", event.detail));
+        if (event.statsLine) card.append(el("p", "snap", event.statsLine));
         if (event.canScrub) card.addEventListener("click", () => this.onScrub(event.id));
         list.append(card);
       } else {
-        const line = el("button", "read-line", event.headline);
+        const line = el("button", "read-line");
         line.type = "button";
+        line.append(el("span", undefined, event.headline));
+        if (event.statsLine) line.append(el("span", "snap", event.statsLine));
         if (event.payload) {
           const pre = el("pre", undefined, JSON.stringify(event.payload, null, 2));
           line.addEventListener("click", () => line.classList.toggle("open"));
@@ -197,7 +200,7 @@ export class UI {
       const btn = el("button", "form-line");
       btn.type = "button";
       const names = f.instanceIds.map(id => state.view.instances.find(i => i.id === id)?.name ?? "建筑").join("、");
-      btn.append(el("b", undefined, f.name + "  +" + f.pct + "%"));
+      btn.append(el("b", undefined, f.name + "  +" + f.pct + "%  · 棋盘 " + f.board));
       btn.append(el("span", undefined, names));
       btn.addEventListener("mouseenter", () => this.onEmphasis(f.instanceIds));
       btn.addEventListener("mouseleave", () => this.onEmphasis(null));
@@ -213,13 +216,13 @@ export class UI {
       this.hover.hidden = true;
       return;
     }
-    this.fillHover(state.view, { r: inst.anchorR, c: inst.anchorC }, true);
+    this.fillHover(state.view, { board: inst.board, r: inst.anchorR, c: inst.anchorC }, true);
     this.hover.style.left = "14px";
     this.hover.style.top = "14px";
   }
 
-  private fillHover(view: ViewModel, cell: { r: number; c: number }, pinned: boolean) {
-    const found = view.cells.find(c => c.r === cell.r && c.c === cell.c);
+  private fillHover(view: ViewModel, cell: Coord, pinned: boolean) {
+    const found = view.cells.find(c => c.board === cell.board && c.r === cell.r && c.c === cell.c);
     if (!found || !found.enabled) {
       this.hover.hidden = true;
       return;
@@ -229,12 +232,12 @@ export class UI {
     this.hover.classList.toggle("pinned", pinned);
     const inst = found.instanceId ? view.instances.find(i => i.id === found.instanceId) : undefined;
     this.hover.append(el("h3", undefined, inst ? inst.name : "空地"));
-    this.hover.append(el("p", "meta", "第 " + cell.r + " 行，第 " + cell.c + " 列"));
+    this.hover.append(el("p", "meta", "棋盘 " + cell.board + "，第 " + cell.r + " 行，第 " + cell.c + " 列"));
     this.hover.append(el("div", "price num", fmtNum(found.price)));
     if (inst) {
       this.hover.append(el("p", "meta", shapeLabel(inst.w, inst.h) + "  锚点 (" + inst.anchorR + "," + inst.anchorC + ")  造价 " + inst.paid));
     }
-    const lines = view.ledger.find(l => l.r === cell.r && l.c === cell.c)?.lines ?? [];
+    const lines = view.ledger.find(l => l.board === cell.board && l.r === cell.r && l.c === cell.c)?.lines ?? [];
     if (!lines.length) this.hover.append(el("p", "meta", "没有加成。"));
     else {
       const ul = el("ul");

@@ -7,7 +7,7 @@ import { apply } from "../shared/apply.ts";
 import { errorOf } from "../shared/errors.ts";
 import {
   buildView, buildingListOf, buildingOf, dictionaryOf,
-  displayStats, fmtDelta, nid, toMapSummary,
+  displayStats, fmtDelta, formatSnapshot, nid, toMapSummary,
 } from "../shared/rules.ts";
 import type { KanbanEvent, SaveRecord, State, Stats, ToolName, UserCommand, ViewModel } from "../shared/types.ts";
 import { loadEvents, loadSaves, loadState, saveEvents, saveMeta, saveSaves, saveState } from "./store.ts";
@@ -74,7 +74,7 @@ function publishSaves() {
   broadcast({ type: "saves", saves: saveMeta(saves) });
 }
 
-const CLEARS = new Set(["clearBoard", "reset", "import", "load"]);
+const CLEARS = new Set(["clearBoard", "reset", "resetBoard", "import", "load"]);
 
 async function runUserCommand(command: UserCommand): Promise<{ ok: boolean; error?: { code: string; message: string }; exportData?: State }> {
   if (command.type === "export") return { ok: true, exportData: state };
@@ -134,8 +134,8 @@ function deltaOf(before: Stats, after: Stats) {
   };
 }
 
-function detailOf(kind: "place" | "demolish", r: number, c: number, before: Stats, after: Stats): string {
-  const where = "第 " + r + " 行第 " + c + " 列";
+function detailOf(kind: "place" | "demolish", board: number, r: number, c: number, before: Stats, after: Stats): string {
+  const where = "棋盘 " + board + " 第 " + r + " 行第 " + c + " 列";
   const parts = [where];
   const dt = roundShown(after.total - before.total);
   if (dt !== 0) parts.push("总地价 " + fmtDelta(after.total - before.total));
@@ -149,19 +149,20 @@ function roundShown(n: number): number {
 }
 
 function runTool(name: string, args: Record<string, unknown>) {
+  const statsLine = formatSnapshot(state);
   if (name === "get_street_dictionary") {
     const payload = dictionaryOf(state);
-    pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了词典", canScrub: false, payload });
+    pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了词典", statsLine, canScrub: false, payload });
     return payload;
   }
   if (name === "list_buildings") {
     const payload = buildingListOf(state);
-    pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了可放置建筑", canScrub: false, payload });
+    pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了可放置建筑", statsLine, canScrub: false, payload });
     return payload;
   }
   if (name === "get_map") {
     const payload = toMapSummary(viewOf());
-    pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了地图", canScrub: false, payload });
+    pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了地图", statsLine, canScrub: false, payload });
     return payload;
   }
   if (name === "place_building") return mutate("place", args);
@@ -171,6 +172,7 @@ function runTool(name: string, args: Record<string, unknown>) {
 
 function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
   const reason = typeof args.reason === "string" ? args.reason : "";
+  const board = Number(args.board);
   const row = Number(args.row);
   const col = Number(args.col);
   const beforeView = viewOf();
@@ -179,8 +181,8 @@ function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
   const named = kind === "place" ? buildingOf(state, typeId)?.name : undefined;
 
   const applied = kind === "place"
-    ? apply(state, { type: "place", typeId, anchorR: row, anchorC: col, rotated: args.rotated === true, reason, source: "mcp" })
-    : apply(state, { type: "demolish", r: row, c: col, reason, source: "mcp" });
+    ? apply(state, { type: "place", typeId, board, anchorR: row, anchorC: col, rotated: args.rotated === true, reason, source: "mcp" })
+    : apply(state, { type: "demolish", board, r: row, c: col, reason, source: "mcp" });
 
   if (!applied.ok) {
     pushEvent({
@@ -192,6 +194,7 @@ function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
       error: applied.error,
       headline: kind === "place" ? (named ? "没能放下" + named : "没能放置") : "没能拆除",
       detail: applied.error.message,
+      statsLine: formatSnapshot(state),
       canScrub: false,
     });
     return { ok: false, error: applied.error };
@@ -214,7 +217,8 @@ function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
     ok: true,
     reason,
     headline,
-    detail: detailOf(kind, row, col, before, after),
+    detail: detailOf(kind, board, row, col, before, after),
+    statsLine: formatSnapshot(state),
     accent,
     canScrub: true,
     snapshot: view,
@@ -231,8 +235,9 @@ function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
         instanceId: inst.id,
         typeId: inst.typeId,
         name: inst.name,
+        board: inst.board,
         anchor: { r: inst.anchorR, c: inst.anchorC },
-        cells: inst.cells,
+        cells: inst.cells.map(cell => ({ r: cell.r, c: cell.c })),
         paid: inst.paid,
       },
       delta,
@@ -245,7 +250,8 @@ function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
       instanceId: inst.id,
       typeId: inst.typeId,
       name: inst.name,
-      cells: inst.cells,
+      board: inst.board,
+      cells: inst.cells.map(cell => ({ r: cell.r, c: cell.c })),
     } : undefined,
     delta,
   };
@@ -267,6 +273,8 @@ const MIME: Record<string, string> = {
   ".json": "application/json",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
 };
 
 function serveStatic(req: IncomingMessage, res: ServerResponse) {
