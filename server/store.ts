@@ -21,7 +21,7 @@ async function readJson<T>(name: string): Promise<T | null> {
 async function writeJson(name: string, data: unknown) {
   await ensure();
   const path = join(root, name);
-  const tmp = path + ".tmp";
+  const tmp = path + "." + process.pid + "." + Date.now().toString(36) + ".tmp";
   await writeFile(tmp, JSON.stringify(data, null, 2));
   await rename(tmp, path);
 }

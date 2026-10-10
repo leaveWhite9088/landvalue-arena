@@ -46,7 +46,7 @@ function hello(ws: WebSocket) {
   send(ws, { type: "hello", view: viewOf(), events, saves: saveMeta(saves) });
 }
 
-function pushEvent(event: KanbanEvent) {
+async function pushEvent(event: KanbanEvent) {
   events.push(event);
   let snaps = 0;
   for (let i = events.length - 1; i >= 0; i--) {
@@ -54,18 +54,18 @@ function pushEvent(event: KanbanEvent) {
     snaps++;
     if (snaps > 200) events[i] = { ...events[i], snapshot: undefined, canScrub: false };
   }
-  void saveEvents(events);
+  await saveEvents(events);
   broadcast({ type: "event", event });
 }
 
-function clearEvents() {
+async function clearEvents() {
   events = [];
-  void saveEvents(events);
+  await saveEvents(events);
   broadcast({ type: "events", events });
 }
 
-function publishView() {
-  void saveState(state);
+async function publishView() {
+  await saveState(state);
   broadcast({ type: "view", view: viewOf() });
 }
 
@@ -88,16 +88,16 @@ async function runUserCommand(command: UserCommand): Promise<{ ok: boolean; erro
     const found = saves.find(s => s.id === command.id);
     if (!found) return { ok: false, error: errorOf("not_found", "找不到这个存档。") };
     state = found.data;
-    publishView();
-    clearEvents();
+    await publishView();
+    await clearEvents();
     return { ok: true };
   }
 
   const applied = apply(state, { ...command, source: "user" });
   if (!applied.ok) return applied;
   state = applied.state;
-  publishView();
-  if (CLEARS.has(command.type)) clearEvents();
+  await publishView();
+  if (CLEARS.has(command.type)) await clearEvents();
   return { ok: true };
 }
 
@@ -148,21 +148,21 @@ function roundShown(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-function runTool(name: string, args: Record<string, unknown>) {
+async function runTool(name: string, args: Record<string, unknown>) {
   const statsLine = formatSnapshot(state);
   if (name === "get_street_dictionary") {
     const payload = dictionaryOf(state);
-    pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了词典", statsLine, canScrub: false, payload });
+    await pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了词典", statsLine, canScrub: false, payload });
     return payload;
   }
   if (name === "list_buildings") {
     const payload = buildingListOf(state);
-    pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了可放置建筑", statsLine, canScrub: false, payload });
+    await pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了可放置建筑", statsLine, canScrub: false, payload });
     return payload;
   }
   if (name === "get_map") {
     const payload = toMapSummary(viewOf());
-    pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了地图", statsLine, canScrub: false, payload });
+    await pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了地图", statsLine, canScrub: false, payload });
     return payload;
   }
   if (name === "place_building") return mutate("place", args);
@@ -170,7 +170,7 @@ function runTool(name: string, args: Record<string, unknown>) {
   return { ok: false, error: errorOf("not_found", "没有这个工具。") };
 }
 
-function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
+async function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
   const reason = typeof args.reason === "string" ? args.reason : "";
   const board = Number(args.board);
   const row = Number(args.row);
@@ -185,7 +185,7 @@ function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
     : apply(state, { type: "demolish", board, r: row, c: col, reason, source: "mcp" });
 
   if (!applied.ok) {
-    pushEvent({
+    await pushEvent({
       id: nid("e"),
       at: Date.now(),
       tool: kind === "place" ? "place_building" : "demolish_building",
@@ -210,7 +210,7 @@ function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
   const headline = kind === "place"
     ? "放下" + (inst?.name ?? "建筑")
     : "拆掉" + (inst?.name ?? "建筑");
-  pushEvent({
+  await pushEvent({
     id: nid("e"),
     at: Date.now(),
     tool: kind === "place" ? "place_building" : "demolish_building",
@@ -223,7 +223,7 @@ function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
     canScrub: true,
     snapshot: view,
   });
-  publishView();
+  await publishView();
 
   const summary = toMapSummary(view);
   const delta = deltaOf(before, after);
