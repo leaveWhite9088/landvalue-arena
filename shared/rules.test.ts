@@ -1,0 +1,204 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { apply } from "./apply.ts";
+import {
+  auraCells, buildView, compareSchemes, computePrices, computeStats,
+  defaultState, findFormations, footprint,
+} from "./rules.ts";
+import { round1, type State } from "./types.ts";
+
+function bare(): State {
+  return {
+    version: 2,
+    rows: 4,
+    cols: 4,
+    holes: [],
+    buildings: [
+      { id: "A", name: "甲", color: "#111", w: 1, h: 1, cost: 10 },
+      { id: "B", name: "乙", color: "#222", w: 1, h: 1, cost: 5 },
+      { id: "C", name: "丙", color: "#333", w: 2, h: 1, cost: 20 },
+      { id: "D", name: "丁", color: "#444", w: 2, h: 2, cost: 30 },
+      { id: "X", name: "桥", color: "#555", w: 1, h: 1, cost: 1 },
+    ],
+    streets: [{ id: "st", name: "试街", types: ["A", "A", "B"], pct: 20 }],
+    instances: [],
+    spent: 0,
+    spendLog: [],
+    priorities: ["total", "max", "repeat", "spend"],
+  };
+}
+
+function put(state: State, typeId: string, r: number, c: number, id: string): State {
+  const b = state.buildings.find(x => x.id === typeId)!;
+  return {
+    ...state,
+    instances: [...state.instances, { id, typeId, anchorR: r, anchorC: c, paid: b.cost }],
+    spent: state.spent + b.cost,
+    spendLog: [...state.spendLog, { instanceId: id, typeId, paid: b.cost, at: 0 }],
+  };
+}
+
+test("一座 2×2 在需要两座甲的街里只算一座", () => {
+  let s = bare();
+  s.buildings = s.buildings.map(b => b.id === "A" ? { ...b, w: 2, h: 2 } : b);
+  s = put(s, "A", 1, 1, "a1");
+  s = put(s, "B", 1, 3, "b1");
+  assert.equal(findFormations(s).length, 0);
+  s = put(s, "A", 3, 3, "a2");
+  assert.equal(findFormations(s).length, 1);
+  assert.equal(findFormations(s)[0].instanceIds.length, 3);
+});
+
+test("同一条街对同一格只生效一次，周围 10% 另算", () => {
+  let s = bare();
+  s.cols = 5;
+  s.streets = [{ id: "st", name: "试街", types: ["C", "A", "B"], pct: 20 }];
+  s = put(s, "C", 2, 2, "c1");
+  const aura = auraCells(s, s.instances[0]);
+  assert.equal(aura.length, 12);
+  s = put(s, "A", 2, 4, "a1");
+  s = put(s, "B", 2, 5, "b1");
+  const { prices, ledger } = computePrices(s);
+  assert.equal(prices["2,2"], 120);
+  assert.equal(prices["2,3"], 132);
+  assert.equal(ledger["2,3"].filter(line => line.pct === 20).length, 1);
+  assert.equal(ledger["2,2"].some(line => line.pct === 10), false);
+});
+
+test("对角相邻算连通，隔格和外来建筑都不连通", () => {
+  let s = bare();
+  s.streets = [{ id: "st", name: "试街", types: ["A", "B", "C"], pct: 20 }];
+  s = put(s, "A", 1, 1, "a");
+  s = put(s, "B", 2, 2, "b");
+  s = put(s, "C", 2, 3, "c");
+  assert.equal(findFormations(s).length, 1);
+
+  let gap = bare();
+  gap.streets = s.streets;
+  gap = put(gap, "A", 1, 1, "a");
+  gap = put(gap, "B", 1, 3, "b");
+  gap = put(gap, "C", 2, 4, "c");
+  assert.equal(findFormations(gap).length, 0);
+
+  let bridge = bare();
+  bridge.streets = s.streets;
+  bridge = put(bridge, "A", 1, 1, "a");
+  bridge = put(bridge, "X", 1, 2, "x");
+  bridge = put(bridge, "B", 1, 3, "b");
+  bridge = put(bridge, "C", 2, 3, "c");
+  assert.equal(findFormations(bridge).length, 0);
+});
+
+test("放置失败不扣费，拆除不退钱，改造价不追溯", () => {
+  const s = put(bare(), "A", 1, 1, "a");
+  const rejected = apply(s, { type: "place", typeId: "A", anchorR: 1, anchorC: 1, source: "mcp", reason: "再放" });
+  assert.equal(rejected.ok, false);
+  assert.equal(s.spent, 10);
+
+  const removed = apply(s, { type: "demolish", r: 1, c: 1, source: "mcp", reason: "拆" });
+  assert.equal(removed.ok, true);
+  if (removed.ok) assert.equal(removed.state.spent, 10);
+
+  const repriced = apply(s, { type: "updateBuilding", id: "A", cost: 99 });
+  assert.equal(repriced.ok, true);
+  if (repriced.ok) {
+    assert.equal(repriced.state.spent, 10);
+    assert.equal(repriced.state.instances[0].paid, 10);
+  }
+});
+
+test("场上还有该类型时不能改形状或删除", () => {
+  const s = put(bare(), "A", 1, 1, "a");
+  const shape = apply(s, { type: "updateBuilding", id: "A", w: 2, h: 1 });
+  assert.equal(shape.ok, false);
+  const del = apply(s, { type: "deleteBuilding", id: "A" });
+  assert.equal(del.ok, false);
+});
+
+test("同一终盘，多拆过的方案在花费上更差；总地价高的仍胜", () => {
+  const calm = put(bare(), "A", 1, 1, "a");
+  const waste = { ...calm, spent: 40, spendLog: [...calm.spendLog, { instanceId: "gone", typeId: "A", paid: 30, at: 1 }] };
+  const calmStats = computeStats(calm, computePrices(calm).prices);
+  const wasteStats = computeStats(waste, computePrices(waste).prices);
+  assert.equal(compareSchemes({ stats: calmStats }, { stats: wasteStats }, calm.priorities), 1);
+
+  let richer = bare();
+  richer.streets = [{ id: "st", name: "试街", types: ["A", "B", "C"], pct: 20 }];
+  richer = put(richer, "A", 1, 1, "a");
+  richer = put(richer, "B", 1, 2, "b");
+  richer = put(richer, "C", 2, 1, "c");
+  const richStats = computeStats(richer, computePrices(richer).prices);
+  assert.ok(richStats.total > calmStats.total);
+  assert.equal(compareSchemes({ stats: richStats }, { stats: calmStats }, richer.priorities), 1);
+});
+
+test("禁用格不吃光环，也不许被占用", () => {
+  let s = bare();
+  s.holes = [{ r: 1, c: 2 }];
+  s.streets = [{ id: "st", name: "试街", types: ["A", "B", "C"], pct: 20 }];
+  s = put(s, "A", 1, 1, "a");
+  s = put(s, "B", 2, 1, "b");
+  s = put(s, "C", 2, 2, "c");
+  const { prices } = computePrices(s);
+  assert.equal(prices["1,2"], undefined);
+  const blocked = apply(s, { type: "place", typeId: "X", anchorR: 1, anchorC: 2 });
+  assert.equal(blocked.ok, false);
+  if (!blocked.ok) assert.equal(blocked.error.code, "disabled_cell");
+});
+
+test("固有光环按占地分档：1×1 → 10%，1×2 → 20%，2×2 → 30%", () => {
+  let s = bare();
+  s.rows = 6;
+  s.cols = 6;
+  s.streets = [];
+  s = put(s, "C", 3, 3, "c1"); // 2×1 @ (3,3)-(3,4)
+  let { prices } = computePrices(s);
+  assert.equal(round1(prices["2,3"]), 120); // 1×2 档 → 20%
+  assert.equal(round1(prices["4,2"]), 120);
+
+  s = put(s, "D", 5, 1, "d1"); // 2×2 @ (5,1)-(6,2)
+  ({ prices } = computePrices(s));
+  assert.equal(round1(prices["4,1"]), 130); // 2×2 档 → 30%
+
+  s = put(s, "A", 1, 1, "a1"); // 1×1
+  ({ prices } = computePrices(s));
+  assert.equal(round1(prices["1,2"]), 110);
+  assert.equal(round1(prices["2,2"]), 132); // A 的 10% 与 C 的 20% 复利叠加
+});
+
+test("默认配置：45 个建筑、20 条街、6×6 空棋盘，街的类型都有效且大建筑的街加成更大", () => {
+  const view = buildView(defaultState());
+  assert.equal(view.buildings.length, 45);
+  assert.equal(view.streets.length, 20);
+  assert.equal(view.rows, 6);
+  assert.equal(view.cols, 6);
+  assert.equal(view.spent, 0);
+  assert.equal(view.stats.placed, 0);
+  const ids = new Set(view.buildings.map(b => b.id));
+  assert.equal(ids.size, 45);
+  for (const street of view.streets) {
+    for (const t of street.types) assert.ok(ids.has(t), street.name + " 引用未知类型 " + t);
+  }
+  const areaOf = (id: string) => {
+    const b = view.buildings.find(x => x.id === id)!;
+    return b.w * b.h;
+  };
+  const hasBig = (types: string[]) => types.some(t => areaOf(t) >= 2);
+  const smallStreets = view.streets.filter(st => !hasBig(st.types));
+  const bigStreets = view.streets.filter(st => hasBig(st.types));
+  assert.ok(smallStreets.length > 0 && bigStreets.length > 0);
+  assert.ok(Math.max(...smallStreets.map(s => s.pct)) < Math.min(...bigStreets.map(s => s.pct)));
+  // 2×2 旗舰街的加成不低于任何街
+  const flagship = view.streets.find(s => s.id === "s_flagship")!;
+  assert.ok(flagship.types.every(t => areaOf(t) === 4));
+  assert.ok(flagship.pct >= Math.max(...view.streets.map(s => s.pct)));
+  // 每个建筑至少属于一条街
+  for (const b of view.buildings) {
+    assert.ok(view.streets.some(st => st.types.includes(b.id)), b.name + " 不属于任何街");
+  }
+});
+
+test("占地由锚点向右向下展开", () => {
+  assert.deepEqual(footprint(2, 2, 2, 1), [{ r: 2, c: 2 }, { r: 2, c: 3 }]);
+  assert.deepEqual(footprint(2, 2, 1, 2), [{ r: 2, c: 2 }, { r: 3, c: 2 }]);
+});
