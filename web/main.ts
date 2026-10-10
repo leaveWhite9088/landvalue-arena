@@ -23,6 +23,7 @@ let live: ViewModel | null = null;
 let events: KanbanEvent[] = [];
 let saves: SaveMeta[] = [];
 let selectedType: string | null = null;
+let rotated = false;
 let demolishMode = false;
 let selectedInstance: string | null = null;
 let scrubId: string | null = null;
@@ -30,6 +31,15 @@ let railCollapsed = true;
 let suppressAuto = false;
 let formationsOpen = false;
 let connected = false;
+let lastCell: { r: number; c: number } | null = null;
+
+// 旋转或切换武装后，按当前悬停格重算预览，避免幻影停留在旧朝向
+function refreshGhost() {
+  if (!scrubId && selectedType && lastCell && live) {
+    const preview = previewPlacement(live, selectedType, lastCell.r, lastCell.c, rotated);
+    scene.setGhost(preview.cells, preview.ok);
+  }
+}
 
 function shown(): ViewModel | null {
   if (scrubId) {
@@ -44,10 +54,12 @@ function paint() {
   if (!view) return;
   scene.show(view);
   if (scrubId) scene.clearGhost();
+  else refreshGhost();
   ui.render({
     view,
     events,
     selectedType,
+    rotated,
     demolishMode,
     selectedInstance,
     scrubId,
@@ -127,13 +139,14 @@ scene.onCell = (cell, kind, x, y) => {
   const view = shown();
   if (!view) return;
   if (kind === "move") {
+    lastCell = cell;
     if (!scrubId && demolishMode && cell && live) {
       const found = live.cells.find(c => c.r === cell.r && c.c === cell.c);
       const inst = found?.instanceId ? live.instances.find(i => i.id === found.instanceId) : undefined;
       if (inst) scene.setGhost(inst.cells, false);
       else scene.clearGhost();
     } else if (!scrubId && selectedType && cell && live) {
-      const preview = previewPlacement(live, selectedType, cell.r, cell.c);
+      const preview = previewPlacement(live, selectedType, cell.r, cell.c, rotated);
       scene.setGhost(preview.cells, preview.ok);
     } else scene.clearGhost();
     ui.placeHover(view, cell, x, y, !!selectedInstance && !scrubId && !demolishMode);
@@ -149,7 +162,7 @@ scene.onCell = (cell, kind, x, y) => {
     return;
   }
   if (selectedType) {
-    void send({ type: "place", typeId: selectedType, anchorR: cell.r, anchorC: cell.c });
+    void send({ type: "place", typeId: selectedType, anchorR: cell.r, anchorC: cell.c, rotated });
     return;
   }
   const found = live.cells.find(c => c.r === cell.r && c.c === cell.c);
@@ -159,6 +172,7 @@ scene.onCell = (cell, kind, x, y) => {
 
 palette.onSelectType = id => {
   selectedType = selectedType === id ? null : id;
+  rotated = false;
   demolishMode = false;
   selectedInstance = null;
   scene.clearGhost();
@@ -167,12 +181,14 @@ palette.onSelectType = id => {
 palette.onToggleDemolish = () => {
   demolishMode = !demolishMode;
   selectedType = null;
+  rotated = false;
   selectedInstance = null;
   scene.clearGhost();
   paint();
 };
 ui.onCancelArm = () => {
   selectedType = null;
+  rotated = false;
   demolishMode = false;
   scene.clearGhost();
   paint();
@@ -199,6 +215,7 @@ ui.onEmphasis = ids => scene.setEmphasis(ids);
 ui.onScrub = id => {
   scrubId = id;
   selectedType = null;
+  rotated = false;
   demolishMode = false;
   selectedInstance = null;
   scene.clearGhost();
@@ -206,8 +223,20 @@ ui.onScrub = id => {
 };
 
 document.addEventListener("keydown", (e) => {
+  if (e.key === "r" || e.key === "R") {
+    const tag = (e.target as HTMLElement | null)?.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    if (!selectedType || !live || scrubId) return;
+    const b = live.buildings.find(x => x.id === selectedType);
+    if (!b || b.w * b.h !== 2) return;
+    rotated = !rotated;
+    refreshGhost();
+    paint();
+    return;
+  }
   if (e.key === "Escape") {
     selectedType = null;
+    rotated = false;
     demolishMode = false;
     selectedInstance = null;
     formationsOpen = false;

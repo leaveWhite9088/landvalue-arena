@@ -3,7 +3,7 @@ import test from "node:test";
 import { apply } from "./apply.ts";
 import {
   auraCells, buildView, compareSchemes, computePrices, computeStats,
-  defaultState, findFormations, footprint,
+  defaultState, findFormations, footprint, instanceCells, normalizeState,
 } from "./rules.ts";
 import { round1, type State } from "./types.ts";
 
@@ -196,6 +196,33 @@ test("默认配置：45 个建筑、20 条街、6×6 空棋盘，街的类型都
   for (const b of view.buildings) {
     assert.ok(view.streets.some(st => st.types.includes(b.id)), b.name + " 不属于任何街");
   }
+});
+
+test("两格建筑可旋转：宽高互换，1×1 与 2×2 忽略", () => {
+  let s = bare(); // C 是 2×1
+  const placed = apply(s, { type: "place", typeId: "C", anchorR: 1, anchorC: 1, rotated: true });
+  assert.equal(placed.ok, true);
+  if (!placed.ok) return;
+  const inst = placed.state.instances[0];
+  assert.equal(inst.rotated, true);
+  assert.deepEqual(instanceCells(placed.state, inst), [{ r: 1, c: 1 }, { r: 2, c: 1 }]);
+  // 旋转后 (1,2) 空出，可以再放
+  const again = apply(placed.state, { type: "place", typeId: "A", anchorR: 1, anchorC: 2 });
+  assert.equal(again.ok, true);
+  // 不旋转则 (1,2) 被占
+  const flat = apply(s, { type: "place", typeId: "C", anchorR: 1, anchorC: 1 });
+  assert.equal(flat.ok, true);
+  if (flat.ok) {
+    const blocked = apply(flat.state, { type: "place", typeId: "A", anchorR: 1, anchorC: 2 });
+    assert.equal(blocked.ok, false);
+  }
+  // 1×1 旋转被忽略
+  const noop = apply(s, { type: "place", typeId: "A", anchorR: 3, anchorC: 3, rotated: true });
+  assert.equal(noop.ok, true);
+  if (noop.ok) assert.equal(noop.state.instances[0].rotated, undefined);
+  // 存档往返保留朝向
+  const round = normalizeState(JSON.parse(JSON.stringify(placed.state)));
+  assert.equal(round?.instances[0].rotated, true);
 });
 
 test("占地由锚点向右向下展开", () => {

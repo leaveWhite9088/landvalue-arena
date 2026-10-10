@@ -27,10 +27,17 @@ export function buildingOf(state: State, id: string): Building | undefined {
   return state.buildings.find(b => b.id === id);
 }
 
+// 两格建筑（1×2/2×1）可旋转：宽高互换；1×1 与 2×2 旋转无意义，忽略
+export function instanceShape(b: Building, rotated: boolean | undefined): { w: number; h: number } {
+  if (rotated && b.w * b.h === 2) return { w: b.h, h: b.w };
+  return { w: b.w, h: b.h };
+}
+
 export function instanceCells(state: State, inst: Instance): Cell[] {
   const b = buildingOf(state, inst.typeId);
   if (!b) return [];
-  return footprint(inst.anchorR, inst.anchorC, b.w, b.h);
+  const { w, h } = instanceShape(b, inst.rotated);
+  return footprint(inst.anchorR, inst.anchorC, w, h);
 }
 
 export function occupantAt(state: State, r: number, c: number): Instance | undefined {
@@ -245,17 +252,19 @@ export function buildView(state: State): ViewModel {
   }
   const instances: InstanceView[] = state.instances.map(inst => {
     const b = buildingOf(state, inst.typeId);
+    const shape = b ? instanceShape(b, inst.rotated) : { w: 1, h: 1 };
     return {
       id: inst.id,
       typeId: inst.typeId,
       name: b?.name ?? "已删除",
       color: b?.color ?? "#888888",
-      w: b?.w ?? 1,
-      h: b?.h ?? 1,
+      w: shape.w,
+      h: shape.h,
       anchorR: inst.anchorR,
       anchorC: inst.anchorC,
       cells: instanceCells(state, inst),
       paid: inst.paid,
+      rotated: inst.rotated ?? false,
     };
   });
   const formationViews: FormationView[] = formations.map(f => {
@@ -493,7 +502,9 @@ export function normalizeState(raw: unknown): State | null {
     if (!Number.isInteger(inst.anchorR) || !Number.isInteger(inst.anchorC)) return null;
     if (!Number.isInteger(inst.paid) || inst.paid < 0) return null;
     const b = buildings.find(x => x.id === inst.typeId)!;
-    const cells = footprint(inst.anchorR, inst.anchorC, b.w, b.h);
+    const rotated = inst.rotated === true && b.w * b.h === 2;
+    const shape = instanceShape(b, rotated);
+    const cells = footprint(inst.anchorR, inst.anchorC, shape.w, shape.h);
     for (const cell of cells) {
       if (!isEnabled(state, cell.r, cell.c)) return null;
       const k = cellKey(cell.r, cell.c);
@@ -506,6 +517,7 @@ export function normalizeState(raw: unknown): State | null {
       anchorR: inst.anchorR,
       anchorC: inst.anchorC,
       paid: inst.paid,
+      ...(rotated ? { rotated: true } : {}),
     });
   }
 
@@ -551,14 +563,15 @@ export function compareSchemes(a: Scheme, b: Scheme, priorities: Objective[]): n
   return 0;
 }
 
-export function previewPlacement(view: ViewModel, typeId: string, anchorR: number, anchorC: number): {
+export function previewPlacement(view: ViewModel, typeId: string, anchorR: number, anchorC: number, rotated = false): {
   ok: boolean;
   cells: Cell[];
   error?: AppError;
 } {
   const b = view.buildings.find(x => x.id === typeId);
   if (!b) return { ok: false, cells: [], error: errorOf("unknown_type") };
-  const cells = footprint(anchorR, anchorC, b.w, b.h);
+  const { w, h } = instanceShape(b, rotated);
+  const cells = footprint(anchorR, anchorC, w, h);
   const byKey = new Map(view.cells.map(c => [cellKey(c.r, c.c), c]));
   for (const cell of cells) {
     const found = byKey.get(cellKey(cell.r, cell.c));

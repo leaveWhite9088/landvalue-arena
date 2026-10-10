@@ -6,6 +6,7 @@ export type UiState = {
   view: ViewModel;
   events: KanbanEvent[];
   selectedType: string | null;
+  rotated: boolean;
   demolishMode: boolean;
   selectedInstance: string | null;
   scrubId: string | null;
@@ -100,9 +101,12 @@ export class UI {
     );
     const actions = el("div", "top-actions");
     if (state.demolishMode || state.selectedType) {
-      const armed = state.demolishMode
-        ? "拆除模式"
-        : "放置：" + (state.view.buildings.find(b => b.id === state.selectedType)?.name ?? "");
+      let armed = "拆除模式";
+      if (!state.demolishMode) {
+        const b = state.view.buildings.find(x => x.id === state.selectedType);
+        const shape = b ? (state.rotated && b.w * b.h === 2 ? shapeLabel(b.h, b.w) : shapeLabel(b.w, b.h)) : "";
+        armed = "放置：" + (b?.name ?? "") + (b && b.w * b.h === 2 ? " " + shape + "（R 旋转）" : "");
+      }
       const tag = el("button", "armed-tag" + (state.demolishMode ? " danger" : ""), armed + " ×");
       tag.type = "button";
       tag.title = "点击取消，回到查看模式";

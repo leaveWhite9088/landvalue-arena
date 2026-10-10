@@ -48,6 +48,8 @@ export type Instance = {
   anchorR: number;
   anchorC: number;
   paid: number;
+  /** 仅两格建筑（1×2/2×1）可旋转：true 时宽高互换 */
+  rotated?: boolean;
 };
 
 export type SpendEntry = {
@@ -102,6 +104,7 @@ export type InstanceView = {
   anchorC: number;
   cells: Cell[];
   paid: number;
+  rotated: boolean;
 };
 
 export type FormationView = {
@@ -191,7 +194,7 @@ export type SaveMeta = {
 export type SaveRecord = SaveMeta & { data: State };
 
 export type UserCommand =
-  | { type: "place"; typeId: string; anchorR: number; anchorC: number }
+  | { type: "place"; typeId: string; anchorR: number; anchorC: number; rotated?: boolean }
   | { type: "demolish"; r: number; c: number }
   | { type: "setSize"; rows: number; cols: number }
   | { type: "setHole"; r: number; c: number; disabled: boolean }
@@ -217,7 +220,7 @@ export const TOOLS: { name: ToolName; description: string }[] = [
   },
   {
     name: "list_buildings",
-    description: "读取可放置的建筑类型。返回标识、名称、宽×高和造价。放置时使用这里的类型标识，不是场上某一座的标识。形状不可旋转。宽是列数，高是行数。预算没有上限。",
+    description: "读取可放置的建筑类型。返回标识、名称、宽×高和造价。放置时使用这里的类型标识，不是场上某一座的标识。宽是列数，高是行数；两格建筑可在放置时旋转。预算没有上限。",
   },
   {
     name: "get_map",
@@ -225,7 +228,7 @@ export const TOOLS: { name: ToolName; description: string }[] = [
   },
   {
     name: "place_building",
-    description: "在锚点放置一座建筑。锚点是占地左上角（行号、列号最小的格），坐标从 1 计，不可旋转。占地任一格越界、禁用或已占用则整步拒绝且不扣费。buildingTypeId 来自 list_buildings。理由必填，不参与计算。成功时返回更新后的地图摘要。",
+    description: "在锚点放置一座建筑。锚点是占地左上角（行号、列号最小的格），坐标从 1 计。占地任一格越界、禁用或已占用则整步拒绝且不扣费。buildingTypeId 来自 list_buildings。两格建筑（1×2/2×1）可旋转：rotated 为 true 时宽高互换；1×1 和 2×2 忽略此参数。理由必填，不参与计算。成功时返回更新后的地图摘要。",
   },
   {
     name: "demolish_building",

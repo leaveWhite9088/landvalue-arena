@@ -179,7 +179,7 @@ function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
   const named = kind === "place" ? buildingOf(state, typeId)?.name : undefined;
 
   const applied = kind === "place"
-    ? apply(state, { type: "place", typeId, anchorR: row, anchorC: col, reason, source: "mcp" })
+    ? apply(state, { type: "place", typeId, anchorR: row, anchorC: col, rotated: args.rotated === true, reason, source: "mcp" })
     : apply(state, { type: "demolish", r: row, c: col, reason, source: "mcp" });
 
   if (!applied.ok) {

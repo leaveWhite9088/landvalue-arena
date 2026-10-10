@@ -2,7 +2,11 @@ import type { Cell, InstanceView, ViewModel } from "../shared/types.ts";
 
 const HW = 58;
 const HH = 29;
-const DEPTH = 8;
+
+// 两格建筑旋转后用镜像贴图：name.png -> name-r.png
+function rotatedImageSrc(src: string): string {
+  return src.replace(/\.png$/, "-r.png");
+}
 
 type Pt = { x: number; y: number };
 
@@ -41,7 +45,11 @@ export class Scene {
 
   show(view: ViewModel) {
     this.view = view;
-    for (const b of view.buildings) if (b.image) this.load(b.image);
+    for (const b of view.buildings) {
+      if (!b.image) continue;
+      this.load(b.image);
+      if (b.w * b.h === 2) this.load(rotatedImageSrc(b.image));
+    }
     this.draw();
   }
 
@@ -98,7 +106,7 @@ export class Scene {
       maxY = Math.max(maxY, p.y);
     }
     minY -= HW * 1.7;
-    maxY += DEPTH + 18;
+    maxY += 20;
     const bw = maxX - minX;
     const bh = maxY - minY;
     this.scale = Math.min((w - 36) / bw, (h - 28) / bh);
@@ -143,7 +151,7 @@ export class Scene {
     for (const cell of cells) this.drawTile(cell.r, cell.c, tileColor(cell.priceExact, view.stats.max));
     if (this.ghost.length) {
       const fill = this.ghostOk ? "rgba(63, 94, 120, 0.28)" : "rgba(154, 64, 56, 0.32)";
-      for (const cell of this.ghost) this.drawTile(cell.r, cell.c, fill, true);
+      for (const cell of this.ghost) this.drawTile(cell.r, cell.c, fill);
     }
     const instances = view.instances.slice().sort((a, b) =>
       (a.anchorR + a.h + a.anchorC + a.w) - (b.anchorR + b.h + b.anchorC + b.w));
@@ -156,61 +164,33 @@ export class Scene {
 
   private drawTable(view: ViewModel) {
     const ctx = this.ctx;
-    const top = this.toScreen(this.raw(0.35, 0.35));
-    const right = this.toScreen(this.raw(0.35, view.cols + 1.65));
-    const bottom = this.toScreen(this.raw(view.rows + 1.65, view.cols + 1.65));
-    const left = this.toScreen(this.raw(view.rows + 1.65, 0.35));
-    const drop = 14;
-    ctx.beginPath();
-    ctx.moveTo(right.x, right.y);
-    ctx.lineTo(bottom.x, bottom.y);
-    ctx.lineTo(bottom.x, bottom.y + drop);
-    ctx.lineTo(right.x, right.y + drop);
-    ctx.closePath();
-    ctx.fillStyle = "#cbbba4";
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(left.x, left.y);
-    ctx.lineTo(bottom.x, bottom.y);
-    ctx.lineTo(bottom.x, bottom.y + drop);
-    ctx.lineTo(left.x, left.y + drop);
-    ctx.closePath();
-    ctx.fillStyle = "#b7a790";
-    ctx.fill();
+    const top = this.toScreen(this.raw(0.55, 0.55));
+    const right = this.toScreen(this.raw(0.55, view.cols + 1.45));
+    const bottom = this.toScreen(this.raw(view.rows + 1.45, view.cols + 1.45));
+    const left = this.toScreen(this.raw(view.rows + 1.45, 0.55));
+    ctx.save();
+    ctx.shadowColor = "rgba(38, 41, 45, 0.14)";
+    ctx.shadowBlur = 28;
+    ctx.shadowOffsetY = 12;
     poly(ctx, [top, right, bottom, left]);
-    ctx.fillStyle = "#e7dccb";
+    ctx.fillStyle = "#ebe7de";
     ctx.fill();
+    ctx.restore();
   }
 
-  private drawTile(r: number, c: number, color: string, flat = false) {
+  private drawTile(r: number, c: number, color: string) {
     const ctx = this.ctx;
     const top = this.toScreen(this.raw(r, c));
     const right = this.toScreen(this.raw(r, c + 1));
     const bottom = this.toScreen(this.raw(r + 1, c + 1));
     const left = this.toScreen(this.raw(r + 1, c));
-    const face = inset([top, right, bottom, left], 0.07);
-    const d = flat ? 0 : DEPTH * this.scale;
-    if (d) {
-      ctx.beginPath();
-      ctx.moveTo(face[1].x, face[1].y);
-      ctx.lineTo(face[2].x, face[2].y);
-      ctx.lineTo(face[2].x, face[2].y + d);
-      ctx.lineTo(face[1].x, face[1].y + d);
-      ctx.closePath();
-      ctx.fillStyle = shade(color, -0.16);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(face[3].x, face[3].y);
-      ctx.lineTo(face[2].x, face[2].y);
-      ctx.lineTo(face[2].x, face[2].y + d);
-      ctx.lineTo(face[3].x, face[3].y + d);
-      ctx.closePath();
-      ctx.fillStyle = shade(color, -0.28);
-      ctx.fill();
-    }
+    const face = inset([top, right, bottom, left], 0.05);
     poly(ctx, face);
     ctx.fillStyle = color;
     ctx.fill();
+    ctx.strokeStyle = "rgba(38, 41, 45, 0.08)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 
   private strokeFootprint(inst: InstanceView, color: string) {
@@ -231,7 +211,11 @@ export class Scene {
 
   private drawBuilding(inst: InstanceView, view: ViewModel) {
     const building = view.buildings.find(b => b.id === inst.typeId);
-    const img = building?.image ? this.images.get(building.image) : undefined;
+    let img = building?.image ? this.images.get(building.image) : undefined;
+    if (inst.rotated && building?.image) {
+      const variant = this.images.get(rotatedImageSrc(building.image));
+      if (variant && variant.complete && variant.naturalWidth) img = variant;
+    }
     if (img && img.complete && img.naturalWidth) {
       this.drawSprite(inst, img);
       return;
@@ -240,13 +224,11 @@ export class Scene {
   }
 
   private drawSprite(inst: InstanceView, img: HTMLImageElement) {
-    const box = this.footprint(inst.anchorR, inst.anchorC, inst.w, inst.h);
-    const cx = (box[0].x + box[2].x) / 2;
-    const cy = (box[0].y + box[2].y) / 2;
-    const span = Math.hypot(box[1].x - box[3].x, box[1].y - box[3].y);
-    const dw = span * 0.5;
+    // 宽度按占地的水平跨度（(w+h) 个半格宽）定，贴图底座中心对准占地中心
+    const cx = this.toScreen(this.raw(inst.anchorR + inst.h / 2, inst.anchorC + inst.w / 2));
+    const dw = (inst.w + inst.h) * HW * this.scale * 0.62;
     const dh = dw * (img.naturalHeight / img.naturalWidth);
-    this.ctx.drawImage(img, cx - dw / 2, cy - dh * 0.58, dw, dh);
+    this.ctx.drawImage(img, cx.x - dw / 2, cx.y - dh * 0.85, dw, dh);
   }
 
   private drawToken(inst: InstanceView, color: string, name: string) {
@@ -296,12 +278,12 @@ export class Scene {
     const x = 16;
     const y = this.canvas.clientHeight - 46;
     const width = 120;
-    ctx.fillStyle = "#e6e1d6";
+    ctx.fillStyle = "#eceae3";
     ctx.fillRect(x, y, width, 8);
     const hot = Math.max(view.stats.max, 100);
     const grad = ctx.createLinearGradient(x, y, x + width, y);
-    grad.addColorStop(0, "#e6e1d6");
-    grad.addColorStop(1, hot <= 100 ? "#e6e1d6" : tileColor(hot, hot));
+    grad.addColorStop(0, "#eceae3");
+    grad.addColorStop(1, hot <= 100 ? "#eceae3" : tileColor(hot, hot));
     ctx.fillStyle = grad;
     ctx.fillRect(x, y, width, 8);
     ctx.fillStyle = "#7a746c";
@@ -346,11 +328,11 @@ function poly(ctx: CanvasRenderingContext2D, pts: Pt[]) {
 }
 
 function tileColor(price: number, max: number): string {
-  if (price <= 100 || max <= 100) return "#e6e1d6";
+  if (price <= 100 || max <= 100) return "#eceae3";
   const t = Math.min(1, (price - 100) / (max - 100));
-  const h = 40 - 28 * t;
-  const s = 42 + 30 * t;
-  const l = 74 - 26 * t;
+  const h = 36 - 20 * t;
+  const s = 24 + 36 * t;
+  const l = 90 - 42 * t;
   return "hsl(" + h.toFixed(0) + " " + s.toFixed(0) + "% " + l.toFixed(0) + "%)";
 }
 

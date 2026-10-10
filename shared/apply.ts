@@ -2,7 +2,7 @@ import type { AppError, Building, State, UserCommand } from "./types.ts";
 import { isShape } from "./types.ts";
 import { errorOf } from "./errors.ts";
 import {
-  buildingOf, defaultState, footprint, instanceCells, isEnabled, isPermutation,
+  buildingOf, defaultState, footprint, instanceCells, instanceShape, isEnabled, isPermutation,
   nextColor, nid, normalizeState, occupantAt,
 } from "./rules.ts";
 
@@ -19,7 +19,8 @@ function clips(state: State, rows: number, cols: number, holes: { r: number; c: 
   for (const inst of state.instances) {
     const b = buildingOf(state, inst.typeId);
     if (!b) return true;
-    for (const cell of footprint(inst.anchorR, inst.anchorC, b.w, b.h)) {
+    const shape = instanceShape(b, inst.rotated);
+    for (const cell of footprint(inst.anchorR, inst.anchorC, shape.w, shape.h)) {
       if (cell.r < 1 || cell.c < 1 || cell.r > rows || cell.c > cols) return true;
       if (holeKeys.has(cell.r + "," + cell.c)) return true;
     }
@@ -66,12 +67,14 @@ export function apply(state: State, command: UserCommand & { reason?: string; so
   }
 }
 
-function place(state: State, command: { typeId: string; anchorR: number; anchorC: number; reason?: string; source?: "user" | "mcp" }): ApplyResult {
+function place(state: State, command: { typeId: string; anchorR: number; anchorC: number; rotated?: boolean; reason?: string; source?: "user" | "mcp" }): ApplyResult {
   if (command.source === "mcp" && !command.reason?.trim()) return fail("missing_reason");
   const b = buildingOf(state, command.typeId);
   if (!b) return fail("unknown_type");
   if (!Number.isInteger(command.anchorR) || !Number.isInteger(command.anchorC)) return fail("out_of_bounds");
-  const cells = footprint(command.anchorR, command.anchorC, b.w, b.h);
+  const rotated = command.rotated === true && b.w * b.h === 2;
+  const shape = instanceShape(b, rotated);
+  const cells = footprint(command.anchorR, command.anchorC, shape.w, shape.h);
   for (const cell of cells) {
     if (!Number.isInteger(cell.r) || cell.r < 1 || cell.c < 1 || cell.r > state.rows || cell.c > state.cols) {
       return fail("out_of_bounds", undefined, cells);
@@ -86,7 +89,7 @@ function place(state: State, command: { typeId: string; anchorR: number; anchorC
     placedId: id,
     state: {
       ...state,
-      instances: [...state.instances, { id, typeId: b.id, anchorR: command.anchorR, anchorC: command.anchorC, paid }],
+      instances: [...state.instances, { id, typeId: b.id, anchorR: command.anchorR, anchorC: command.anchorC, paid, ...(rotated ? { rotated: true } : {}) }],
       spent: state.spent + paid,
       spendLog: [...state.spendLog, { instanceId: id, typeId: b.id, paid, at: Date.now() }],
     },

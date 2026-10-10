@@ -73,7 +73,7 @@ export class Palette {
       this.dialog.close();
     });
     tools.append(remove);
-    tools.append(el("p", "hint", "点一家店，再点沙盘上的格子放下。Esc 取消。"));
+    tools.append(el("p", "hint", "点一家店，再点沙盘上的格子放下。两格建筑按 R 旋转。Esc 取消。"));
     panel.append(tools);
 
     if (!view.buildings.length) {
