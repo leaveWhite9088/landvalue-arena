@@ -672,6 +672,18 @@ export function previewPlacement(view: ViewModel, typeId: string, board: number,
   return { ok: true, cells };
 }
 
+export function objectivesOf(state: State) {
+  return {
+    rule: "先比 rank 为 1 的那一项，持平再比下一项。higher 越大越好，lower 越小越好。不要假设总地价一定排第一。",
+    objectives: state.priorities.map((key, index) => ({
+      rank: index + 1,
+      key,
+      label: OBJECTIVE_META[key].label,
+      better: OBJECTIVE_META[key].better,
+    })),
+  };
+}
+
 export function dictionaryOf(state: State) {
   return {
     streets: state.streets.map(st => ({

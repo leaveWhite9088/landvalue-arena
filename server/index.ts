@@ -7,10 +7,11 @@ import { apply } from "../shared/apply.ts";
 import { errorOf } from "../shared/errors.ts";
 import {
   buildView, buildingListOf, buildingOf, dictionaryOf,
-  displayStats, fmtDelta, formatSnapshot, nid, toMapSummary,
+  displayStats, fmtDelta, formatSnapshot, nid, objectivesOf, toMapSummary,
 } from "../shared/rules.ts";
-import type { KanbanEvent, SaveRecord, State, Stats, ToolName, UserCommand, ViewModel } from "../shared/types.ts";
-import { loadEvents, loadSaves, loadState, saveEvents, saveMeta, saveSaves, saveState } from "./store.ts";
+import type { EndedBy, KanbanEvent, RoundMeta, RoundRecord, SaveRecord, State, Stats, ToolName, UserCommand, ViewModel } from "../shared/types.ts";
+import { tallyCalls } from "../shared/types.ts";
+import { loadEvents, loadRounds, loadSaves, loadState, saveEvents, saveMeta, saveRounds, saveSaves, saveState } from "./store.ts";
 
 const PORT = 26101;
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -19,6 +20,7 @@ const dist = join(root, "dist");
 let state: State = await loadState();
 let events: KanbanEvent[] = await loadEvents();
 let saves: SaveRecord[] = await loadSaves();
+let rounds: RoundRecord[] = await loadRounds();
 await saveState(state);
 
 const clients = new Set<WebSocket>();
@@ -43,7 +45,33 @@ function viewOf(): ViewModel {
 }
 
 function hello(ws: WebSocket) {
-  send(ws, { type: "hello", view: viewOf(), events, saves: saveMeta(saves) });
+  send(ws, { type: "hello", view: viewOf(), events: [], saves: saveMeta(saves), rounds: rounds.map(metaOf) });
+}
+
+function metaOf(round: RoundRecord): RoundMeta {
+  return {
+    id: round.id,
+    name: round.name,
+    startedAt: round.startedAt,
+    endedAt: round.endedAt,
+    endedBy: round.endedBy,
+    calls: tallyCalls(round.events),
+  };
+}
+
+async function persistRounds() {
+  await saveRounds(rounds);
+  broadcast({ type: "rounds", rounds: rounds.map(metaOf) });
+}
+
+function broadcastRound(round: RoundRecord, event?: KanbanEvent) {
+  broadcast({
+    type: "round",
+    roundId: round.id,
+    meta: metaOf(round),
+    view: buildView(round.state),
+    event,
+  });
 }
 
 async function pushEvent(event: KanbanEvent) {
@@ -104,6 +132,7 @@ async function runUserCommand(command: UserCommand): Promise<{ ok: boolean; erro
 function saveNamed(name: string): { ok: boolean; error?: { code: string; message: string } } {
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, error: errorOf("empty_name") };
+  if (trimmed.length > 64) return { ok: false, error: errorOf("bad_name", "存档名称最多 64 个字。") };
   if (saves.some(s => s.name === trimmed)) return { ok: false, error: errorOf("duplicate_save_name") };
   const view = viewOf();
   const shown = displayStats(view.stats);
@@ -148,113 +177,256 @@ function roundShown(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-async function runTool(name: string, args: Record<string, unknown>) {
-  const statsLine = formatSnapshot(state);
-  if (name === "get_street_dictionary") {
-    const payload = dictionaryOf(state);
-    await pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了词典", statsLine, canScrub: false, payload });
-    return payload;
-  }
-  if (name === "list_buildings") {
-    const payload = buildingListOf(state);
-    await pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了可放置建筑", statsLine, canScrub: false, payload });
-    return payload;
-  }
-  if (name === "get_map") {
-    const payload = toMapSummary(viewOf());
-    await pushEvent({ id: nid("e"), at: Date.now(), tool: name, ok: true, headline: "查看了地图", statsLine, canScrub: false, payload });
-    return payload;
-  }
-  if (name === "place_building") return mutate("place", args);
-  if (name === "demolish_building") return mutate("demolish", args);
-  return { ok: false, error: errorOf("not_found", "没有这个工具。") };
+function roundOf(id: string): RoundRecord | undefined {
+  return rounds.find(round => round.id === id);
 }
 
-async function mutate(kind: "place" | "demolish", args: Record<string, unknown>) {
-  const reason = typeof args.reason === "string" ? args.reason : "";
+function tagRound(round: RoundRecord, payload: Record<string, unknown>) {
+  return {
+    roundId: round.id,
+    roundName: round.name,
+    open: round.endedAt == null,
+    endedBy: round.endedBy,
+    ...payload,
+  };
+}
+
+async function pushRoundEvent(round: RoundRecord, event: KanbanEvent) {
+  round.events.push(event);
+  let snaps = 0;
+  for (let i = round.events.length - 1; i >= 0; i--) {
+    if (!round.events[i].snapshot) continue;
+    snaps++;
+    if (snaps > 200) round.events[i] = { ...round.events[i], snapshot: undefined, canScrub: false };
+  }
+  await persistRounds();
+  broadcastRound(round, event);
+}
+
+async function runTool(name: string, args: Record<string, unknown>) {
+  const known = ["get_objectives", "get_street_dictionary", "list_buildings", "get_map", "place_building", "demolish_building", "finish_round"];
+  if (!known.includes(name)) return { ok: false, error: errorOf("not_found", "没有这个工具。") };
+  const roundId = typeof args.roundId === "string" ? args.roundId.trim() : "";
+  if (!roundId) return { ok: false, error: errorOf("missing_round") };
+  const round = roundOf(roundId);
+  if (!round) return { ok: false, error: errorOf("unknown_round") };
+  if (name === "finish_round") return finishRound(round, args);
+  if (name === "place_building" || name === "demolish_building") {
+    if (round.endedAt != null) {
+      const error = errorOf("round_closed");
+      await pushRoundEvent(round, {
+        id: nid("e"),
+        at: Date.now(),
+        tool: name,
+        ok: false,
+        reason: typeof args.reason === "string" ? args.reason : "",
+        error,
+        headline: name === "place_building" ? "没能放置" : "没能拆除",
+        detail: error.message,
+        statsLine: formatSnapshot(round.state),
+        canScrub: false,
+      });
+      return { ok: false, error };
+    }
+    return mutate(round, name === "place_building" ? "place" : "demolish", args);
+  }
+  const statsLine = formatSnapshot(round.state);
+  const payload = name === "get_objectives"
+    ? objectivesOf(round.state)
+    : name === "get_street_dictionary"
+      ? dictionaryOf(round.state)
+      : name === "list_buildings"
+        ? buildingListOf(round.state)
+        : toMapSummary(buildView(round.state));
+  const headline = name === "get_objectives" ? "查看了优化目标"
+    : name === "get_street_dictionary" ? "查看了词典"
+      : name === "list_buildings" ? "查看了可放置建筑"
+        : "查看了地图";
+  await pushRoundEvent(round, {
+    id: nid("e"),
+    at: Date.now(),
+    tool: name as ToolName,
+    ok: true,
+    headline,
+    statsLine,
+    canScrub: false,
+    payload,
+  });
+  return tagRound(round, payload as Record<string, unknown>);
+}
+
+async function mutate(round: RoundRecord, kind: "place" | "demolish", args: Record<string, unknown>) {
+  const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+  const tool: ToolName = kind === "place" ? "place_building" : "demolish_building";
+  if (reason.length < 8) {
+    const error = errorOf("missing_reason", kind === "place"
+      ? "写一小段放置理由，说明为什么放在这块棋盘的这个位置。不要只写一两个字。"
+      : "写一小段拆除理由，说明为什么拆。不要只写一两个字。");
+    await pushRoundEvent(round, {
+      id: nid("e"), at: Date.now(), tool, ok: false, reason, error,
+      headline: kind === "place" ? "没能放置" : "没能拆除",
+      detail: error.message, statsLine: formatSnapshot(round.state), canScrub: false,
+    });
+    return { ok: false, error };
+  }
   const board = Number(args.board);
   const row = Number(args.row);
   const col = Number(args.col);
-  const beforeView = viewOf();
+  const beforeView = buildView(round.state);
   const before = beforeView.stats;
   const typeId = String(args.buildingTypeId ?? "");
-  const named = kind === "place" ? buildingOf(state, typeId)?.name : undefined;
-
+  const named = kind === "place" ? buildingOf(round.state, typeId)?.name : undefined;
   const applied = kind === "place"
-    ? apply(state, { type: "place", typeId, board, anchorR: row, anchorC: col, rotated: args.rotated === true, reason, source: "mcp" })
-    : apply(state, { type: "demolish", board, r: row, c: col, reason, source: "mcp" });
-
+    ? apply(round.state, { type: "place", typeId, board, anchorR: row, anchorC: col, rotated: args.rotated === true, reason, source: "mcp" })
+    : apply(round.state, { type: "demolish", board, r: row, c: col, reason, source: "mcp" });
   if (!applied.ok) {
-    await pushEvent({
-      id: nid("e"),
-      at: Date.now(),
-      tool: kind === "place" ? "place_building" : "demolish_building",
-      ok: false,
-      reason,
-      error: applied.error,
+    await pushRoundEvent(round, {
+      id: nid("e"), at: Date.now(), tool, ok: false, reason, error: applied.error,
       headline: kind === "place" ? (named ? "没能放下" + named : "没能放置") : "没能拆除",
-      detail: applied.error.message,
-      statsLine: formatSnapshot(state),
-      canScrub: false,
+      detail: applied.error.message, statsLine: formatSnapshot(round.state), canScrub: false,
     });
     return { ok: false, error: applied.error };
   }
-
-  state = applied.state;
-  const view = viewOf();
+  round.state = applied.state;
+  const view = buildView(round.state);
   const after = view.stats;
   const inst = kind === "place"
     ? view.instances.find(i => i.id === applied.placedId)
     : beforeView.instances.find(i => i.id === applied.removedId);
-  const accent = inst?.color;
-  const headline = kind === "place"
-    ? "放下" + (inst?.name ?? "建筑")
-    : "拆掉" + (inst?.name ?? "建筑");
-  await pushEvent({
+  await pushRoundEvent(round, {
     id: nid("e"),
     at: Date.now(),
-    tool: kind === "place" ? "place_building" : "demolish_building",
+    tool,
     ok: true,
     reason,
-    headline,
+    headline: kind === "place" ? "放下" + (inst?.name ?? "建筑") : "拆掉" + (inst?.name ?? "建筑"),
     detail: detailOf(kind, board, row, col, before, after),
-    statsLine: formatSnapshot(state),
-    accent,
+    statsLine: formatSnapshot(round.state),
+    accent: inst?.color,
     canScrub: true,
     snapshot: view,
   });
-  await publishView();
-
   const summary = toMapSummary(view);
   const delta = deltaOf(before, after);
   if (kind === "place" && inst) {
-    return {
+    return tagRound(round, {
       ok: true,
       ...summary,
       placed: {
-        instanceId: inst.id,
-        typeId: inst.typeId,
-        name: inst.name,
-        board: inst.board,
+        instanceId: inst.id, typeId: inst.typeId, name: inst.name, board: inst.board,
         anchor: { r: inst.anchorR, c: inst.anchorC },
         cells: inst.cells.map(cell => ({ r: cell.r, c: cell.c })),
         paid: inst.paid,
       },
       delta,
-    };
+    });
   }
-  return {
+  return tagRound(round, {
     ok: true,
     ...summary,
     removed: inst ? {
-      instanceId: inst.id,
-      typeId: inst.typeId,
-      name: inst.name,
-      board: inst.board,
+      instanceId: inst.id, typeId: inst.typeId, name: inst.name, board: inst.board,
       cells: inst.cells.map(cell => ({ r: cell.r, c: cell.c })),
     } : undefined,
     delta,
+  });
+}
+
+async function finishRound(round: RoundRecord, args: Record<string, unknown>) {
+  const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+  if (round.endedAt != null) return { ok: false, error: errorOf("round_closed", "这一局已经交过卷。") };
+  if (reason.length < 8) {
+    const error = errorOf("missing_reason", "写一小段交卷理由，说明为什么现在结束。");
+    await pushRoundEvent(round, {
+      id: nid("e"), at: Date.now(), tool: "finish_round", ok: false, reason, error,
+      headline: "没能交卷", detail: error.message, statsLine: formatSnapshot(round.state), canScrub: false,
+    });
+    return { ok: false, error };
+  }
+  const view = buildView(round.state);
+  await pushRoundEvent(round, {
+    id: nid("e"), at: Date.now(), tool: "finish_round", ok: true, reason,
+    headline: "模型交卷", detail: "终局已冻结", statsLine: formatSnapshot(round.state),
+    canScrub: true, snapshot: view,
+  });
+  await closeRound(round, "model");
+  return tagRound(round, { ok: true, endedBy: "model", ...toMapSummary(buildView(round.state)) });
+}
+
+function saveNameFor(name: string, id: string): string {
+  if (!saves.some(save => save.name === name)) return name;
+  const suffix = " · " + id.slice(0, 8);
+  let candidate = name.slice(0, Math.max(1, 64 - suffix.length)) + suffix;
+  let n = 2;
+  while (saves.some(save => save.name === candidate)) {
+    candidate = name.slice(0, 40) + suffix + "-" + n;
+    n++;
+  }
+  return candidate;
+}
+
+async function closeRound(round: RoundRecord, endedBy: EndedBy) {
+  if (round.endedAt == null) {
+    round.endedAt = Date.now();
+    round.endedBy = endedBy;
+  }
+  const view = buildView(round.state);
+  const shown = displayStats(view.stats);
+  saves.push({
+    id: nid("save"),
+    name: saveNameFor(round.name, round.id),
+    time: round.endedAt,
+    endedBy,
+    roundId: round.id,
+    snapshot: {
+      total: shown.total,
+      max: shown.max,
+      repeat: shown.repeat,
+      spent: view.spent,
+      placed: shown.placed,
+      cells: shown.cells,
+    },
+    data: structuredClone(round.state),
+  });
+  await saveSaves(saves);
+  broadcast({ type: "saves", saves: saveMeta(saves) });
+  await persistRounds();
+  broadcastRound(round);
+}
+
+async function startRound(name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return { ok: false as const, error: errorOf("empty_name") };
+  if (trimmed.length > 64) return { ok: false as const, error: errorOf("bad_name", "对局名称最多 64 个字。") };
+  const round: RoundRecord = {
+    id: crypto.randomUUID(),
+    name: trimmed,
+    startedAt: Date.now(),
+    endedAt: null,
+    endedBy: null,
+    state: structuredClone(state),
+    events: [],
   };
+  rounds.push(round);
+  await persistRounds();
+  broadcastRound(round);
+  return { ok: true as const, roundId: round.id, name: round.name, view: buildView(round.state), events: round.events };
+}
+
+async function deleteRound(roundId: string) {
+  const round = roundOf(roundId);
+  if (!round) return { ok: false as const, error: errorOf("unknown_round") };
+  rounds = rounds.filter(item => item.id !== roundId);
+  await persistRounds();
+  return { ok: true as const, roundId };
+}
+
+async function endRoundByHuman(roundId: string) {
+  const round = roundOf(roundId);
+  if (!round) return { ok: false as const, error: errorOf("unknown_round") };
+  if (round.endedAt != null) return { ok: false as const, error: errorOf("round_closed", "这一局已经结束。") };
+  await closeRound(round, "human");
+  return { ok: true as const, roundId: round.id, endedBy: "human" as const };
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -331,6 +503,41 @@ wss.on("connection", ws => {
     void enqueue(async () => {
       let msg: { type?: string; id?: string; command?: UserCommand };
       try { msg = JSON.parse(String(raw)); } catch { return; }
+      if (msg.type === "round" && msg.id) {
+        const action = (msg as { action?: string; name?: string; roundId?: string }).action;
+        const asked = (msg as { roundId?: string }).roundId;
+        if (action === "start") {
+          const result = await startRound(String((msg as { name?: string }).name ?? ""));
+          send(ws, { type: "result", id: msg.id, ...result });
+          return;
+        }
+        if (action === "end") {
+          const result = await endRoundByHuman(String(asked ?? ""));
+          send(ws, { type: "result", id: msg.id, ...result });
+          return;
+        }
+        if (action === "delete") {
+          const result = await deleteRound(String(asked ?? ""));
+          send(ws, { type: "result", id: msg.id, ...result });
+          return;
+        }
+        if (action === "watch") {
+          const round = roundOf(String(asked ?? ""));
+          if (!round) {
+            send(ws, { type: "result", id: msg.id, ok: false, error: errorOf("unknown_round") });
+            return;
+          }
+          send(ws, {
+            type: "result",
+            id: msg.id,
+            ok: true,
+            roundId: round.id,
+            view: buildView(round.state),
+            events: round.events,
+          });
+          return;
+        }
+      }
       if (msg.type !== "command" || !msg.id || !msg.command) return;
       const result = await runUserCommand(msg.command);
       send(ws, { type: "result", id: msg.id, ...result });

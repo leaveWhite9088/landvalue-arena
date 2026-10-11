@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultState, normalizeState } from "../shared/rules.ts";
-import type { KanbanEvent, SaveMeta, SaveRecord, State } from "../shared/types.ts";
+import type { KanbanEvent, RoundRecord, SaveMeta, SaveRecord, State } from "../shared/types.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
 
@@ -49,6 +49,33 @@ export async function loadSaves(): Promise<SaveRecord[]> {
 
 export async function saveSaves(saves: SaveRecord[]) {
   await writeJson("saves.json", saves);
+}
+
+export async function loadRounds(): Promise<RoundRecord[]> {
+  const raw = await readJson<unknown>("rounds.json");
+  if (!Array.isArray(raw)) return [];
+  const out: RoundRecord[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Partial<RoundRecord>;
+    if (typeof row.id !== "string" || typeof row.name !== "string") continue;
+    const next = normalizeState(row.state);
+    if (!next) continue;
+    out.push({
+      id: row.id,
+      name: row.name,
+      startedAt: typeof row.startedAt === "number" ? row.startedAt : Date.now(),
+      endedAt: typeof row.endedAt === "number" ? row.endedAt : null,
+      endedBy: row.endedBy === "human" || row.endedBy === "model" ? row.endedBy : null,
+      state: next,
+      events: Array.isArray(row.events) ? row.events as KanbanEvent[] : [],
+    });
+  }
+  return out;
+}
+
+export async function saveRounds(rounds: RoundRecord[]) {
+  await writeJson("rounds.json", rounds);
 }
 
 export function saveMeta(saves: SaveRecord[]): SaveMeta[] {

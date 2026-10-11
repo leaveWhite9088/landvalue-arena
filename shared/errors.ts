@@ -1,6 +1,9 @@
 export function errorOf(code: string, message?: string, cells?: { board?: number; r: number; c: number }[]) {
   const defaults: Record<string, string> = {
-    missing_reason: "放置和拆除都要写理由。",
+    missing_reason: "放置、拆除和交卷都要写一小段理由。",
+    missing_round: "每次调用都要带这一局的编号 roundId。向开局的人要，不要猜。",
+    unknown_round: "没有这一局。使用开局时给你的编号，不要猜。",
+    round_closed: "这一局已经结束，不能再放置或拆除。",
     unknown_type: "没有这个建筑类型。",
     unknown_board: "没有这块棋盘。编号从 1 计，先看地图里的 boards。",
     too_many_boards: "最多 4 块棋盘。",

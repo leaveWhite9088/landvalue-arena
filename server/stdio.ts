@@ -38,39 +38,59 @@ function pack(data: { ok?: boolean }) {
 
 const server = new McpServer({ name: "landvalue", version: "1.0.0" });
 
-server.registerTool("get_street_dictionary", { description: desc("get_street_dictionary") }, async () => {
-  return pack(await call("get_street_dictionary", {}));
-});
+const roundId = z.string().describe("这一局的编号。开局的人会给你，每次调用都要带上，不要猜，不要省略");
 
-server.registerTool("list_buildings", { description: desc("list_buildings") }, async () => {
-  return pack(await call("list_buildings", {}));
-});
+server.registerTool("get_objectives", {
+  description: desc("get_objectives"),
+  inputSchema: { roundId },
+}, async (args) => pack(await call("get_objectives", args)));
 
-server.registerTool("get_map", { description: desc("get_map") }, async () => {
-  return pack(await call("get_map", {}));
-});
+server.registerTool("get_street_dictionary", {
+  description: desc("get_street_dictionary"),
+  inputSchema: { roundId },
+}, async (args) => pack(await call("get_street_dictionary", args)));
+
+server.registerTool("list_buildings", {
+  description: desc("list_buildings"),
+  inputSchema: { roundId },
+}, async (args) => pack(await call("list_buildings", args)));
+
+server.registerTool("get_map", {
+  description: desc("get_map"),
+  inputSchema: { roundId },
+}, async (args) => pack(await call("get_map", args)));
 
 server.registerTool("place_building", {
   description: desc("place_building"),
   inputSchema: {
     buildingTypeId: z.string().describe("建筑类型标识，来自 list_buildings，不是场上某一座的 id"),
+    roundId,
     board: z.number().int().describe("棋盘编号，从 1 计。先看 get_map 的 boards，不要猜，也不要省略"),
     row: z.number().int().describe("锚点行，从 1 计，属于这块棋盘。锚点是占地左上角"),
     col: z.number().int().describe("锚点列，从 1 计，属于这块棋盘"),
     rotated: z.boolean().optional().describe("旋转 90°：仅两格建筑有效，true 时宽高互换。1×1 和 2×2 忽略"),
-    reason: z.string().describe("放置理由，必填，不参与计算"),
+    reason: z.string().describe("一小段放置理由，给步骤栏看，不参与计算。写两到四句：为什么放在这块棋盘的这个锚点，想形成或加强哪条街，对总地价或最高地价有什么帮助。不要只写「放置」。"),
   },
 }, async (args) => pack(await call("place_building", args)));
 
 server.registerTool("demolish_building", {
   description: desc("demolish_building"),
   inputSchema: {
+    roundId,
     board: z.number().int().describe("棋盘编号，从 1 计。先看 get_map，不要猜"),
     row: z.number().int().describe("该座占地中任意一格的行，从 1 计"),
     col: z.number().int().describe("该座占地中任意一格的列，从 1 计"),
-    reason: z.string().describe("拆除理由，必填，不参与计算"),
+    reason: z.string().describe("一小段拆除理由，给步骤栏看，不参与计算。说明为什么拆、拆了之后想怎么放。不要只写「拆除」。"),
   },
 }, async (args) => pack(await call("demolish_building", args)));
+
+server.registerTool("finish_round", {
+  description: desc("finish_round"),
+  inputSchema: {
+    roundId,
+    reason: z.string().describe("一小段交卷理由，给步骤栏看，不参与计算。说明为什么现在把这一局作为终局。不要只写「结束」。"),
+  },
+}, async (args) => pack(await call("finish_round", args)));
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

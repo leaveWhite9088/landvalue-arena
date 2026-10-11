@@ -190,12 +190,41 @@ export type MapSummary = {
 
 export type AppError = { code: string; message: string; cells?: { board?: number; r: number; c: number }[] };
 
+export type EndedBy = "human" | "model";
+
+export type CallTally = {
+  total: number;
+  failed: number;
+  tools: { tool: string; ok: number; fail: number }[];
+};
+
+export type RoundMeta = {
+  id: string;
+  name: string;
+  startedAt: number;
+  endedAt: number | null;
+  endedBy: EndedBy | null;
+  calls: CallTally;
+};
+
+export type RoundRecord = {
+  id: string;
+  name: string;
+  startedAt: number;
+  endedAt: number | null;
+  endedBy: EndedBy | null;
+  state: State;
+  events: KanbanEvent[];
+};
+
 export type ToolName =
+  | "get_objectives"
   | "get_street_dictionary"
   | "list_buildings"
   | "get_map"
   | "place_building"
-  | "demolish_building";
+  | "demolish_building"
+  | "finish_round";
 
 export type KanbanEvent = {
   id: string;
@@ -226,6 +255,8 @@ export type SaveMeta = {
     placed: number;
     cells: number;
   };
+  endedBy?: EndedBy;
+  roundId?: string;
 };
 
 export type SaveRecord = SaveMeta & { data: State };
@@ -254,36 +285,64 @@ export type UserCommand =
   | { type: "export" };
 
 export const MAP_NOTES = [
-  "坐标是三元组 (board, row, col)，三个数都从 1 计。board 是棋盘编号，等于下面 boards 的顺序，不是建筑 id。",
+  "每次调用都要带 roundId。那是这一局的编号，由开局的人给你，不要猜，不要省略。",
   "最多 4 块棋盘，每块行数和列数独立，以本次返回的 boards 为准。不要假设只有一块，也不要假设尺寸。",
   "占用、禁用、固有光环、专业街成街与光环都不跨棋盘。同一条街可以在不同棋盘上各自成街一次。",
   "总地价、最高地价、重复次数、累计花费、占地是全部棋盘合计。重复按类型在全部棋盘上的座数计算，不按棋盘分开。",
   "建筑自身占的格子也吃到该建筑的固有加成，以及盖到它的专业街。同一条街在同一簇里对同一格只乘一次。",
   "地价已由服务端算好。不要自己复利，用返回的 price 和 stats。",
+  "比较两个方案时调用 get_objectives。第 1 项最重要，持平再比下一项。不要假设总地价一定排第一。",
 ];
 
 export const TOOLS: { name: ToolName; description: string }[] = [
   {
+    name: "get_objectives",
+    description: "读取当前优化目标，按重要性从高到低排列。必须带 roundId，这一局的编号。第 1 项最重要。比较方案时按这个顺序做字典序比较：先比第 1 项，持平再比下一项。better 为 higher 表示越大越好，lower 表示越小越好。不要假设总地价一定排第一，顺序可以由人改，以本次返回为准。模型不能改这个顺序。",
+  },
+  {
     name: "get_street_dictionary",
-    description: "读取专业街词典和当前优化优先级。每条街恰好 3 个建筑类型，加成是百分比。成街按座、按同一块棋盘上的八邻接连通簇判定，不跨棋盘，不按格，光环重叠不算相邻。不要自己计算地价。",
+    description: "读取这一局的专业街词典。必须带 roundId。每条街恰好 3 个建筑类型，加成是百分比。成街按座、按同一块棋盘上的八邻接连通簇判定，不跨棋盘，不按格，光环重叠不算相邻。优化目标调用 get_objectives。不要自己计算地价。",
   },
   {
     name: "list_buildings",
-    description: "读取可放置的建筑类型。返回标识、名称、宽×高和造价。放置时用这里的类型标识，不是场上某一座的标识。宽是列数，高是行数。两格建筑（1×2/2×1）放置时可旋转，1×1 和 2×2 不能。预算没有上限。",
+    description: "读取这一局可放置的建筑类型。必须带 roundId。返回标识、名称、宽×高和造价。放置时用这里的类型标识，不是场上某一座的标识。宽是列数，高是行数。两格建筑（1×2/2×1）放置时可旋转，1×1 和 2×2 不能。预算没有上限。",
   },
   {
     name: "get_map",
-    description: "读取全部棋盘。坐标是三元组 (board, row, col)，都从 1 计。最多 4 块，编号是 boards 的顺序，尺寸各自独立，以返回值为准，不要假设只有一块或尺寸固定。占用、光环、成街都不跨棋盘。返回每块的尺寸、禁用格、建筑和每格地价，以及全部棋盘合计的总地价、最高地价、重复次数、累计花费、占地。地价已含建筑自身占地，不要自行复利。不能用这个工具改配置。",
+    description: "读取这一局的全部棋盘。必须带 roundId。坐标是三元组 (board, row, col)，都从 1 计。最多 4 块，编号是 boards 的顺序，尺寸各自独立，以返回值为准。占用、光环、成街都不跨棋盘。返回每块的尺寸、禁用格、建筑和每格地价，以及这一局合计的总地价、最高地价、重复次数、累计花费、占地。地价已含建筑自身占地，不要自行复利。哪个指标最重要调用 get_objectives。不能用这个工具改配置。",
   },
   {
     name: "place_building",
-    description: "在指定棋盘的锚点放置一座建筑。board、row、col 都从 1 计，缺一不可。锚点是该棋盘上占地左上角（行号、列号最小的格）。board 必须是 get_map 里存在的编号。占地任一格越出这块棋盘、踩到禁用格或已有建筑，整步拒绝且不扣费，光环也不会溢出到别的棋盘。buildingTypeId 来自 list_buildings。两格建筑可设 rotated 为 true 使宽高互换，1×1 和 2×2 忽略该参数。理由必填，不参与计算。成功时返回更新后的全部棋盘。不能增删棋盘或改尺寸。",
+    description: "在这一局指定棋盘的锚点放置一座建筑。必须带 roundId，不要猜。board、row、col 都从 1 计。锚点是该棋盘上占地左上角。占地任一格越出这块棋盘、踩到禁用格或已有建筑，整步拒绝且不扣费。buildingTypeId 来自 list_buildings。两格建筑可设 rotated 为 true 使宽高互换。reason 必填，不参与计算，会原样出现在这一局的步骤栏。写一小段放置理由。成功时返回更新后的这一局地图。不能增删棋盘或改尺寸。对局结束后不能再放。",
   },
   {
     name: "demolish_building",
-    description: "拆除指定棋盘上该坐标所在的整座建筑。board、row、col 都从 1 计，可以是占地中的任意一格。不退钱。棋盘编号不存在，或该格没有建筑，则拒绝，盘面不变。理由必填，不参与计算。成功时返回更新后的全部棋盘。",
+    description: "拆除这一局里、指定棋盘上该坐标所在的整座建筑。必须带 roundId。board、row、col 都从 1 计。不退钱。该格没有建筑则拒绝。reason 必填，会原样出现在步骤栏。写一小段拆除理由。成功时返回更新后的这一局地图。对局结束后不能再拆。",
+  },
+  {
+    name: "finish_round",
+    description: "把这一局作为终局提交。必须带 roundId。不移动棋子，不退钱，只是交卷。提交后不能再放置或拆除。reason 写一小段，说明为什么现在交卷。人也可以强制截止，那会另作标记，和模型交卷不是同一种结束。",
   },
 ];
+
+export function tallyCalls(events: { tool: string; ok: boolean }[]): CallTally {
+  const by = new Map(TOOLS.map(tool => [tool.name, { tool: tool.name, ok: 0, fail: 0 }]));
+  let failed = 0;
+  for (const event of events) {
+    const row = by.get(event.tool as ToolName);
+    if (!row) continue;
+    if (event.ok) row.ok++;
+    else {
+      row.fail++;
+      failed++;
+    }
+  }
+  return {
+    total: events.length,
+    failed,
+    tools: [...by.values()].filter(row => row.ok + row.fail > 0),
+  };
+}
 
 export function cellKey(board: number, r: number, c: number): string {
   return board + "," + r + "," + c;
