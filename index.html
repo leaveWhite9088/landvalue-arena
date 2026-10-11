@@ -34,8 +34,8 @@
   <dialog id="round-name">
     <form method="dialog" class="name-form">
       <h2>开始一局</h2>
-      <p class="hint">按当前出题盘原样复制一份，场上建筑一并带上。选好是哪个模型在下。</p>
-      <input type="text" name="round" maxlength="64" placeholder="对局名称" required>
+      <p class="hint">按当前出题盘原样复制一份，场上建筑一并带上。选好模型厂家、填上版本号，名称自动编成「模型版本-日期-第x局」。</p>
+      <input type="text" name="version" maxlength="12" placeholder="模型版本，如 4.7" required>
       <div class="model-pick" id="model-pick"></div>
       <div class="row">
         <button class="btn" value="ok">开始</button>
@@ -44,6 +44,7 @@
     </form>
   </dialog>
   <dialog id="build"></dialog>
+  <dialog id="rank"></dialog>
   <dialog id="config"></dialog>
   <div id="popover" class="popover" hidden></div>
   <div id="toast" role="status"></div>

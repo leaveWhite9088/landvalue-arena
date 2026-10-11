@@ -26,7 +26,7 @@ export class UI {
   onToggleFormations: () => void = () => {};
   onEmphasis: (ids: string[] | null) => void = () => {};
   onScrub: (id: string | null) => void = () => {};
-  onStartRound: (name: string, model: string) => void = () => {};
+  onStartRound: (version: string, model: string) => void = () => {};
   onEndRound: () => void = () => {};
   onResumeRound: (id: string) => void = () => {};
   onRenameRound: (id: string, name: string) => void = () => {};
@@ -42,6 +42,7 @@ export class UI {
   private hover = document.querySelector("#hover") as HTMLElement;
   private scrub = document.querySelector("#scrub") as HTMLElement;
   private popover = document.querySelector("#popover") as HTMLElement;
+  private rank = document.querySelector("#rank") as HTMLDialogElement;
   private toastEl = document.querySelector("#toast") as HTMLElement;
   private boot = document.querySelector("#boot") as HTMLElement;
   private confirmEnd = false;
@@ -64,6 +65,7 @@ export class UI {
     this.renderRail(state);
     this.renderScrub(state);
     this.renderPopover(state);
+    this.renderRank(state);
     if (state.selectedInstance) this.renderPinned(state);
     else if (!this.hover.hidden && !this.hover.classList.contains("pinned")) {
       /* follow-cursor card is updated by placeHover */
@@ -118,18 +120,27 @@ export class UI {
     brand.append(titles);
     const stats = el("div", "stats");
     const s = state.view.stats;
+    const watching = state.rounds.find(round => round.id === state.watchId);
+    const elapsed = watching ? elapsedSecOf(watching) : 0;
+    const scoreStat = stat(fmtNum(s.score), "得分", () => scoreTip(s, elapsed));
+    if (watching && !watching.endedAt) {
+      const b = scoreStat.querySelector("b");
+      if (b) {
+        b.classList.add("round-score");
+        b.dataset.base = String(s.total + s.max * 2 - s.repeat * 100 - s.spent);
+      }
+    }
     stats.append(
-      stat(fmtNum(s.score), "得分", () => scoreTip(s)),
+      scoreStat,
       stat(fmtNum(s.total), "总地价", () => totalTip(state.view)),
       stat(fmtNum(s.max), "最高", () => maxTip(state.view)),
       stat(String(s.repeat), "重复", () => repeatTip(state.view)),
       stat(s.covered + "/" + s.cells, "占地"),
       stat(String(s.spent), "花费"),
     );
-    const watching = state.rounds.find(round => round.id === state.watchId);
     if (watching) {
       const calls = tallyCalls(state.events);
-      stats.append(clockStat(fmtDuration(watching.startedAt, watching.endedAt), "用时"));
+      stats.append(clockStat(fmtElapsed(watching), "用时"));
       stats.append(stat(String(calls.total), "调用"));
     }
     const actions = el("div", "top-actions");
@@ -156,6 +167,12 @@ export class UI {
     const config = el("button", "ghost", "配置");
     config.type = "button";
     config.addEventListener("click", () => this.onOpenConfig());
+    const rank = el("button", "ghost", "排行");
+    rank.type = "button";
+    rank.addEventListener("click", () => {
+      this.rank.showModal();
+      this.renderRank(state);
+    });
     const startLabel = !watching ? "开始" : watching.endedAt ? "继续" : this.confirmEnd ? "确认结束" : "结束";
     const start = el("button", "btn", startLabel);
     start.type = "button";
@@ -176,8 +193,58 @@ export class UI {
       this.confirmEnd = false;
       this.onEndRound();
     });
-    actions.append(menu, build, streets, config, start);
+    actions.append(menu, build, streets, config, rank, start);
     this.topbar.append(brand, stats, actions);
+  }
+
+  private renderRank(state: UiState) {
+    if (!this.rank.open) return;
+    clear(this.rank);
+    const panel = el("div", "rank-panel");
+    const title = el("div", "rank-title");
+    title.append(el("h2", undefined, "排行榜"));
+    const close = el("button", "ghost", "关闭");
+    close.type = "button";
+    close.addEventListener("click", () => this.rank.close());
+    title.append(close);
+    panel.append(title);
+    if (!state.rounds.length) {
+      panel.append(el("p", "hint", "还没有对局。开始一局之后，这里按综合得分排名。"));
+      this.rank.append(panel);
+      return;
+    }
+    const table = el("table", "rank-table");
+    const head = el("tr");
+    for (const t of ["#", "对局", "得分", "总地价", "最高", "重复", "花费", "用时", "调用", "状态"]) {
+      head.append(el("th", undefined, t));
+    }
+    table.append(head);
+    const rows = [...state.rounds].sort((a, b) => b.summary.score - a.summary.score);
+    rows.forEach((round, i) => {
+      const tr = el("tr", state.watchId === round.id ? "current" : undefined);
+      tr.append(el("td", "num", String(i + 1)));
+      const nameCell = el("td", "rank-name");
+      const who = modelOf(round.model);
+      if (who) nameCell.append(face(who.avatar));
+      nameCell.append(el("span", undefined, round.name));
+      tr.append(nameCell);
+      tr.append(el("td", "num rank-score", fmtNum(round.summary.score)));
+      tr.append(el("td", "num", fmtNum(round.summary.total)));
+      tr.append(el("td", "num", fmtNum(round.summary.max)));
+      tr.append(el("td", "num", String(round.summary.repeat)));
+      tr.append(el("td", "num", String(round.summary.spent)));
+      tr.append(el("td", "num", fmtElapsed(round)));
+      tr.append(el("td", "num", String(round.calls.total)));
+      tr.append(el("td", undefined, roundMark(round)));
+      tr.title = "点开看这一局";
+      tr.addEventListener("click", () => {
+        this.rank.close();
+        this.onWatchRound(round.id);
+      });
+      table.append(tr);
+    });
+    panel.append(table);
+    this.rank.append(panel);
   }
 
   private renderRail(state: UiState) {
@@ -273,7 +340,12 @@ export class UI {
     if (!this.menuOpen) return wrap;
     const list = el("div", "round-list");
     list.append(this.roundChoice(state, "出题盘", null, !state.watchId));
-    for (const round of state.rounds) {
+    // 同一厂家排在一起（按 MODELS 顺序），组内按开局时间从早到晚
+    const modelOrder = new Map(MODELS.map((m, i) => [m.id, i]));
+    const sorted = [...state.rounds].sort((a, b) =>
+      (modelOrder.get(a.model as never) ?? 99) - (modelOrder.get(b.model as never) ?? 99)
+      || a.startedAt - b.startedAt);
+    for (const round of sorted) {
       const who = modelOf(round.model);
       const row = el("div", "round-row" + (state.watchId === round.id ? " current" : ""));
       const name = el("button", "round-name", round.name + (who ? " · " + who.name : "") + " · " + roundMark(round));
@@ -298,7 +370,7 @@ export class UI {
         this.onRenameRound(round.id, next);
         this.renderTop(state);
       });
-      const resume = round.endedAt ? el("span", "round-edit", "继续") : null;
+      const resume = round.endedAt ? el("span", "round-resume", "继续") : null;
       resume?.addEventListener("click", (e) => {
         e.stopPropagation();
         this.closeMenu();
@@ -361,7 +433,7 @@ export class UI {
   private askRoundName() {
     const dialog = document.querySelector("#round-name") as HTMLDialogElement | null;
     if (!dialog) return;
-    const input = dialog.querySelector("input[name=round]") as HTMLInputElement;
+    const input = dialog.querySelector("input[name=version]") as HTMLInputElement;
     input.value = "";
     const pick = dialog.querySelector("#model-pick") as HTMLElement;
     if (!pick.childElementCount) {
@@ -524,11 +596,11 @@ function hideStatTip() {
 type ViewStats = ViewModel["stats"];
 type ViewCell = ViewModel["cells"][number];
 
-function scoreTip(s: ViewStats): string[] {
+function scoreTip(s: ViewStats, elapsedSec: number): string[] {
   return [
-    "得分 = 总地价 + 最高地价×2 − 重复×100 − 花费",
-    "= " + fmtNum(s.total) + " + " + fmtNum(s.max) + "×2 − " + s.repeat + "×100 − " + s.spent,
-    "= " + fmtNum(s.total) + " + " + fmtNum(s.max * 2) + " − " + (s.repeat * 100) + " − " + s.spent,
+    "得分 = 总地价 + 最高地价×2 − 重复×100 − 花费 − 用时秒数",
+    "= " + fmtNum(s.total) + " + " + fmtNum(s.max) + "×2 − " + s.repeat + "×100 − " + s.spent + " − " + elapsedSec,
+    "= " + fmtNum(s.total) + " + " + fmtNum(s.max * 2) + " − " + (s.repeat * 100) + " − " + s.spent + " − " + elapsedSec,
     "= " + fmtNum(s.score),
   ];
 }
@@ -582,14 +654,16 @@ function toolLabel(tool: string) {
   return tool;
 }
 
-function fmtDuration(startedAt: number, endedAt: number | null) {
-  const ms = Math.max(0, (endedAt ?? Date.now()) - startedAt);
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
+function elapsedSecOf(round: RoundMeta): number {
+  const running = round.endedAt == null ? Date.now() - round.clockStart : 0;
+  return Math.max(0, Math.floor((round.accMs + running) / 1000));
+}
+
+// 用时固定 时:分:秒，宽度不变，不跳格式
+function fmtElapsed(round: RoundMeta) {
+  const s = elapsedSecOf(round);
   const p = (n: number) => String(n).padStart(2, "0");
-  return p(h) + ":" + p(m) + ":" + p(sec);
+  return p(Math.floor(s / 3600)) + ":" + p(Math.floor((s % 3600) / 60)) + ":" + p(s % 60);
 }
 
 function countSteps(events: KanbanEvent[]) {

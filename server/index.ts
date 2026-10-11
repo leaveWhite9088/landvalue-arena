@@ -48,7 +48,13 @@ function hello(ws: WebSocket) {
   send(ws, { type: "hello", view: viewOf(), events: [], saves: saveMeta(saves), rounds: rounds.map(metaOf) });
 }
 
+function elapsedOf(round: RoundRecord): number {
+  const running = round.endedAt == null ? Date.now() - round.clockStart : 0;
+  return Math.max(0, Math.floor((round.accMs + running) / 1000));
+}
+
 function metaOf(round: RoundRecord): RoundMeta {
+  const shown = displayStats(buildView(round.state, elapsedOf(round)).stats);
   return {
     id: round.id,
     name: round.name,
@@ -56,7 +62,10 @@ function metaOf(round: RoundRecord): RoundMeta {
     startedAt: round.startedAt,
     endedAt: round.endedAt,
     endedBy: round.endedBy,
+    accMs: round.accMs,
+    clockStart: round.clockStart,
     calls: tallyCalls(round.events),
+    summary: { score: shown.score, total: shown.total, max: shown.max, repeat: shown.repeat, spent: shown.spent },
   };
 }
 
@@ -70,7 +79,7 @@ function broadcastRound(round: RoundRecord, event?: KanbanEvent) {
     type: "round",
     roundId: round.id,
     meta: metaOf(round),
-    view: buildView(round.state),
+    view: buildView(round.state, elapsedOf(round)),
     event,
   });
 }
@@ -224,21 +233,21 @@ async function runTool(name: string, args: Record<string, unknown>) {
         error,
         headline: name === "place_building" ? "没能放置" : "没能拆除",
         detail: error.message,
-        statsLine: formatSnapshot(round.state),
+        statsLine: formatSnapshot(round.state, elapsedOf(round)),
         canScrub: false,
       });
       return { ok: false, error };
     }
     return mutate(round, name === "place_building" ? "place" : "demolish", args);
   }
-  const statsLine = formatSnapshot(round.state);
+  const statsLine = formatSnapshot(round.state, elapsedOf(round));
   const payload = name === "get_objectives"
     ? objectivesOf(round.state)
     : name === "get_street_dictionary"
       ? dictionaryOf(round.state)
       : name === "list_buildings"
         ? buildingListOf(round.state)
-        : toMapSummary(buildView(round.state));
+        : toMapSummary(buildView(round.state, elapsedOf(round)));
   const headline = name === "get_objectives" ? "查看了优化目标"
     : name === "get_street_dictionary" ? "查看了词典"
       : name === "list_buildings" ? "查看了可放置建筑"
@@ -266,14 +275,14 @@ async function mutate(round: RoundRecord, kind: "place" | "demolish", args: Reco
     await pushRoundEvent(round, {
       id: nid("e"), at: Date.now(), tool, ok: false, reason, error,
       headline: kind === "place" ? "没能放置" : "没能拆除",
-      detail: error.message, statsLine: formatSnapshot(round.state), canScrub: false,
+      detail: error.message, statsLine: formatSnapshot(round.state, elapsedOf(round)), canScrub: false,
     });
     return { ok: false, error };
   }
   const board = Number(args.board);
   const row = Number(args.row);
   const col = Number(args.col);
-  const beforeView = buildView(round.state);
+  const beforeView = buildView(round.state, elapsedOf(round));
   const before = beforeView.stats;
   const typeId = String(args.buildingTypeId ?? "");
   const named = kind === "place" ? buildingOf(round.state, typeId)?.name : undefined;
@@ -284,12 +293,12 @@ async function mutate(round: RoundRecord, kind: "place" | "demolish", args: Reco
     await pushRoundEvent(round, {
       id: nid("e"), at: Date.now(), tool, ok: false, reason, error: applied.error,
       headline: kind === "place" ? (named ? "没能放下" + named : "没能放置") : "没能拆除",
-      detail: applied.error.message, statsLine: formatSnapshot(round.state), canScrub: false,
+      detail: applied.error.message, statsLine: formatSnapshot(round.state, elapsedOf(round)), canScrub: false,
     });
     return { ok: false, error: applied.error };
   }
   round.state = applied.state;
-  const view = buildView(round.state);
+  const view = buildView(round.state, elapsedOf(round));
   const after = view.stats;
   const inst = kind === "place"
     ? view.instances.find(i => i.id === applied.placedId)
@@ -302,7 +311,7 @@ async function mutate(round: RoundRecord, kind: "place" | "demolish", args: Reco
     reason,
     headline: kind === "place" ? "放下" + (inst?.name ?? "建筑") : "拆掉" + (inst?.name ?? "建筑"),
     detail: detailOf(kind, board, row, col, before, after),
-    statsLine: formatSnapshot(round.state),
+    statsLine: formatSnapshot(round.state, elapsedOf(round)),
     accent: inst?.color,
     canScrub: true,
     snapshot: view,
@@ -340,81 +349,64 @@ async function finishRound(round: RoundRecord, args: Record<string, unknown>) {
     const error = errorOf("missing_reason", "写一小段交卷理由，说明为什么现在结束。");
     await pushRoundEvent(round, {
       id: nid("e"), at: Date.now(), tool: "finish_round", ok: false, reason, error,
-      headline: "没能交卷", detail: error.message, statsLine: formatSnapshot(round.state), canScrub: false,
+      headline: "没能交卷", detail: error.message, statsLine: formatSnapshot(round.state, elapsedOf(round)), canScrub: false,
     });
     return { ok: false, error };
   }
-  const view = buildView(round.state);
+  const view = buildView(round.state, elapsedOf(round));
   await pushRoundEvent(round, {
     id: nid("e"), at: Date.now(), tool: "finish_round", ok: true, reason,
-    headline: "模型交卷", detail: "终局已冻结", statsLine: formatSnapshot(round.state),
+    headline: "模型交卷", detail: "终局已冻结", statsLine: formatSnapshot(round.state, elapsedOf(round)),
     canScrub: true, snapshot: view,
   });
   await closeRound(round, "model");
-  return tagRound(round, { ok: true, endedBy: "model", ...toMapSummary(buildView(round.state)) });
-}
-
-function saveNameFor(name: string, id: string): string {
-  if (!saves.some(save => save.name === name)) return name;
-  const suffix = " · " + id.slice(0, 8);
-  let candidate = name.slice(0, Math.max(1, 64 - suffix.length)) + suffix;
-  let n = 2;
-  while (saves.some(save => save.name === candidate)) {
-    candidate = name.slice(0, 40) + suffix + "-" + n;
-    n++;
-  }
-  return candidate;
+  return tagRound(round, { ok: true, endedBy: "model", ...toMapSummary(buildView(round.state, elapsedOf(round))) });
 }
 
 async function closeRound(round: RoundRecord, endedBy: EndedBy) {
   if (round.endedAt == null) {
     round.endedAt = Date.now();
     round.endedBy = endedBy;
+    round.accMs += Math.max(0, round.endedAt - round.clockStart);
   }
-  const view = buildView(round.state);
-  const shown = displayStats(view.stats);
-  saves.push({
-    id: nid("save"),
-    name: saveNameFor(round.name, round.id),
-    time: round.endedAt,
-    endedBy,
-    roundId: round.id,
-    snapshot: {
-      total: shown.total,
-      max: shown.max,
-      repeat: shown.repeat,
-      spent: view.spent,
-      placed: shown.placed,
-      cells: shown.cells,
-    },
-    data: structuredClone(round.state),
-  });
-  await saveSaves(saves);
-  broadcast({ type: "saves", saves: saveMeta(saves) });
   await persistRounds();
   broadcastRound(round);
 }
 
-async function startRound(name: string, model: string) {
-  const trimmed = name.trim();
+function dayStamp(at: number): string {
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate());
+}
+
+async function startRound(version: string, model: string) {
+  // 名字 = 模型版本-日期-第x局；版本里已经带了厂家名就不要再拼一遍，避免 grokgrok4.7
+  let v = version.trim().replace(/\s+/g, "");
   const picked = modelOf(model);
-  if (!trimmed) return { ok: false as const, error: errorOf("empty_name") };
-  if (trimmed.length > 64) return { ok: false as const, error: errorOf("bad_name", "对局名称最多 64 个字。") };
   if (!picked) return { ok: false as const, error: errorOf("unknown_model") };
+  if (v.toLowerCase().startsWith(picked.id)) v = v.slice(picked.id.length);
+  if (!v) return { ok: false as const, error: errorOf("empty_name", "填一下模型版本。") };
+  if (v.length > 12) return { ok: false as const, error: errorOf("bad_name", "模型版本最多 12 个字符。") };
+  const day = dayStamp(Date.now());
+  const seq = rounds.filter(r => r.model === picked.id && dayStamp(r.startedAt) === day).length + 1;
+  const name = picked.id + v + "-" + day + "-" + String(seq).padStart(2, "0");
+  const now = Date.now();
   const round: RoundRecord = {
     id: crypto.randomUUID(),
-    name: trimmed,
+    name,
     model: picked.id,
-    startedAt: Date.now(),
+    startedAt: now,
     endedAt: null,
     endedBy: null,
+    accMs: 0,
+    clockStart: now,
     state: structuredClone(state),
     events: [],
   };
   rounds.push(round);
   await persistRounds();
   broadcastRound(round);
-  return { ok: true as const, roundId: round.id, name: round.name, view: buildView(round.state), events: round.events };
+  return { ok: true as const, roundId: round.id, name: round.name, view: buildView(round.state, elapsedOf(round)), events: round.events };
 }
 
 async function deleteRound(roundId: string) {
@@ -439,6 +431,7 @@ async function resumeRound(roundId: string) {
   if (round.endedAt == null) return { ok: true as const, roundId: round.id };
   round.endedAt = null;
   round.endedBy = null;
+  round.clockStart = Date.now();
   await persistRounds();
   broadcastRound(round);
   return { ok: true as const, roundId: round.id };
@@ -533,8 +526,8 @@ wss.on("connection", ws => {
         const action = (msg as { action?: string; name?: string; roundId?: string }).action;
         const asked = (msg as { roundId?: string }).roundId;
         if (action === "start") {
-          const asked = msg as { name?: string; model?: string };
-          const result = await startRound(String(asked.name ?? ""), String(asked.model ?? ""));
+          const asked = msg as { version?: string; model?: string };
+          const result = await startRound(String(asked.version ?? ""), String(asked.model ?? ""));
           send(ws, { type: "result", id: msg.id, ...result });
           return;
         }
@@ -570,7 +563,7 @@ wss.on("connection", ws => {
             id: msg.id,
             ok: true,
             roundId: round.id,
-            view: buildView(round.state),
+            view: buildView(round.state, elapsedOf(round)),
             events: round.events,
           });
           return;

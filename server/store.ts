@@ -62,13 +62,18 @@ export async function loadRounds(): Promise<RoundRecord[]> {
     if (typeof row.id !== "string" || typeof row.name !== "string") continue;
     const next = normalizeState(row.state);
     if (!next) continue;
+    const startedAt = typeof row.startedAt === "number" ? row.startedAt : Date.now();
+    const endedAt = typeof row.endedAt === "number" ? row.endedAt : null;
     out.push({
       id: row.id,
       name: row.name,
       model: modelOf(typeof row.model === "string" ? row.model : "")?.id ?? "",
-      startedAt: typeof row.startedAt === "number" ? row.startedAt : Date.now(),
-      endedAt: typeof row.endedAt === "number" ? row.endedAt : null,
+      startedAt,
+      endedAt,
       endedBy: row.endedBy === "human" || row.endedBy === "model" ? row.endedBy : null,
+      // 旧档没有分段计时：已结束的按整段时长补记，进行中的从头计
+      accMs: typeof row.accMs === "number" ? row.accMs : endedAt != null ? endedAt - startedAt : 0,
+      clockStart: typeof row.clockStart === "number" ? row.clockStart : startedAt,
       state: next,
       events: Array.isArray(row.events) ? row.events as KanbanEvent[] : [],
     });

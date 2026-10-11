@@ -518,18 +518,60 @@ button { cursor: pointer; }
   cursor: pointer;
 }
 
-.round-edit {
+.round-edit, .round-resume {
   flex: none;
   font-size: 12px;
   color: var(--muted);
   cursor: pointer;
 }
 
-.round-edit:hover { color: var(--accent); }
+.round-edit:hover, .round-resume:hover { color: var(--accent); }
+
+.round-resume { color: var(--accent); }
 
 .name-form { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .name-form h2 { margin: 0; font-family: var(--font-display); font-size: 20px; }
 
+/* 排行榜 */
+
+#rank { width: min(880px, 94vw); }
+
+.rank-panel {
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.rank-title { display: flex; align-items: center; justify-content: space-between; }
+.rank-title h2 { margin: 0; font-family: var(--font-display); font-size: 20px; }
+
+.rank-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+.rank-table th {
+  text-align: left;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.rank-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.rank-table tr { cursor: pointer; }
+.rank-table tr:hover td, .rank-table tr.current td { background: var(--accent-soft); }
+.rank-table tr:first-child td { cursor: default; }
+.rank-table tr:first-child:hover td { background: transparent; }
+
+.rank-name { display: flex; align-items: center; gap: 8px; }
+.rank-score { font-weight: 600; }
 
 .step .reason {
   margin: 6px 0 0;

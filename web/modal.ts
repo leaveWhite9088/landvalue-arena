@@ -41,7 +41,7 @@ export class Modal {
       close.addEventListener("click", () => this.dialog.close());
       head.append(close);
       const tabs = el("div", "tabs");
-      for (const [id, label] of [["board", "棋盘"], ["priority", "优先级"], ["saves", "存档"]] as const) {
+      for (const [id, label] of [["board", "棋盘"], ["priority", "优先级"], ["saves", "蓝图"]] as const) {
         const btn = el("button", "tab" + (this.tab === id ? " active" : ""), label);
         btn.type = "button";
         btn.addEventListener("click", () => { this.tab = id; this.paint(true); });
@@ -156,10 +156,10 @@ export class Modal {
   }
 
   private paintSaves(panel: HTMLElement) {
-    panel.append(el("p", "hint", "这里保存的是出题盘。开局会按当时的出题盘原样复制。已结束的对局在顶栏下拉里打开。"));
-    const name = textInput("存档名称", 64);
+    panel.append(el("p", "hint", "蓝图是出题盘的快照。开局会按当时的出题盘原样复制。结束对局不再自动存档，对局在顶栏下拉里打开。"));
+    const name = textInput("蓝图名称", 64);
     name.classList.add("save-name");
-    const save = el("button", "btn", "保存存档");
+    const save = el("button", "btn", "保存蓝图");
     save.type = "button";
     save.addEventListener("click", () => {
       this.send({ type: "save", name: name.value });
@@ -168,14 +168,13 @@ export class Modal {
     const row = el("div", "row");
     row.append(name, save);
     panel.append(row);
-    if (!this.saves.length) panel.append(el("p", "hint", "还没有存档。"));
+    if (!this.saves.length) panel.append(el("p", "hint", "还没有蓝图。"));
     for (const sv of this.saves) {
       const item = el("div", "save-item");
       const grow = el("div", "grow");
       grow.append(el("div", undefined, sv.name));
       const d = new Date(sv.time);
-      const mark = sv.endedBy === "model" ? "  · 模型结束" : sv.endedBy === "human" ? "  · 人工结束" : "";
-      grow.append(el("small", undefined, stamp(d) + "  总地价 " + fmtNum(sv.snapshot.total) + "  花费 " + sv.snapshot.spent + mark));
+      grow.append(el("small", undefined, stamp(d) + "  总地价 " + fmtNum(sv.snapshot.total) + "  花费 " + sv.snapshot.spent));
       const load = el("button", "ghost", "加载");
       load.type = "button";
       load.addEventListener("click", () => this.send({ type: "load", id: sv.id }));

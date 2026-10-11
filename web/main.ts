@@ -1,4 +1,5 @@
 import { previewPlacement } from "../shared/rules.ts";
+import { fmtNum } from "../shared/types.ts";
 import type { Coord, KanbanEvent, RoundMeta, SaveMeta, UserCommand, ViewModel } from "../shared/types.ts";
 import { Modal } from "./modal.ts";
 import { Net } from "./net.ts";
@@ -322,10 +323,14 @@ const roundCancel = roundDialog.querySelector("button[value='cancel']") as HTMLB
 roundCancel.addEventListener("click", () => roundDialog.close("cancel"));
 roundDialog.addEventListener("close", () => {
   if (roundDialog.returnValue !== "ok") return;
-  const input = roundDialog.querySelector("input[name=round]") as HTMLInputElement;
+  const input = roundDialog.querySelector("input[name=version]") as HTMLInputElement;
   const picked = roundDialog.querySelector("input[name=model]:checked") as HTMLInputElement | null;
   if (!picked) {
     ui.toast("先选一个模型。");
+    return;
+  }
+  if (!input.value.trim()) {
+    ui.toast("填一下模型版本。");
     return;
   }
   ui.onStartRound(input.value, picked.value);
@@ -343,8 +348,8 @@ ui.onDeleteRound = id => {
 ui.onCopyRound = id => {
   void navigator.clipboard.writeText(id).then(() => ui.toast("编号已复制。")).catch(() => ui.toast(id));
 };
-ui.onStartRound = (name, model) => {
-  void net.round("start", { name, model }).then(async result => {
+ui.onStartRound = (version, model) => {
+  void net.round("start", { version, model }).then(async result => {
     if (!result.ok) {
       ui.toast(result.error?.message ?? "没有开始。");
       return;
@@ -472,9 +477,15 @@ document.addEventListener("click", (e) => {
 window.setInterval(() => {
   const round = rounds.find(item => item.id === watchId);
   if (!round || round.endedAt) return;
-  const s = Math.floor(Math.max(0, Date.now() - round.startedAt) / 1000);
+  const s = Math.floor(Math.max(0, round.accMs + Date.now() - round.clockStart) / 1000);
   const p = (n: number) => String(n).padStart(2, "0");
   ui.setClock(p(Math.floor(s / 3600)) + ":" + p(Math.floor((s % 3600) / 60)) + ":" + p(s % 60));
+  // 得分每秒扣 1 分，跟时钟一起走
+  const scoreNode = document.querySelector(".round-score") as HTMLElement | null;
+  if (scoreNode?.dataset.base) {
+    const base = Number(scoreNode.dataset.base);
+    if (Number.isFinite(base)) scoreNode.textContent = fmtNum(base - s);
+  }
 }, 1000);
 
 window.addEventListener("resize", () => scene.resize());

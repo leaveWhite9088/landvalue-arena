@@ -239,7 +239,7 @@ export function computeStats(state: State, prices: Record<string, number>, elaps
     cells,
     covered,
     spent: state.spent,
-    score: total + top * 2 - repeat * 100 - state.spent,
+    score: total + top * 2 - repeat * 100 - state.spent - elapsedSec,
   };
 }
 
