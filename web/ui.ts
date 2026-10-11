@@ -1,6 +1,6 @@
 import { clear, el } from "./dom.ts";
-import type { Coord, KanbanEvent, ViewModel } from "../shared/types.ts";
-import { fmtNum, shapeLabel } from "../shared/types.ts";
+import type { Coord, KanbanEvent, RoundMeta, ViewModel } from "../shared/types.ts";
+import { fmtNum, shapeLabel, tallyCalls } from "../shared/types.ts";
 
 export type UiState = {
   view: ViewModel;
@@ -12,6 +12,8 @@ export type UiState = {
   scrubId: string | null;
   railCollapsed: boolean;
   formationsOpen: boolean;
+  rounds: RoundMeta[];
+  watchId: string | null;
 };
 
 export class UI {
@@ -24,6 +26,13 @@ export class UI {
   onToggleFormations: () => void = () => {};
   onEmphasis: (ids: string[] | null) => void = () => {};
   onScrub: (id: string | null) => void = () => {};
+  onStartRound: (name: string) => void = () => {};
+  onEndRound: () => void = () => {};
+  onWatchRound: (id: string | null) => void = () => {};
+  onDeleteRound: (id: string) => void = () => {};
+  onCopyRound: (id: string) => void = () => {};
+  private menuOpen = false;
+  private confirmDelete = "";
 
   private topbar = document.querySelector("#topbar") as HTMLElement;
   private rail = document.querySelector("#rail") as HTMLElement;
@@ -33,9 +42,21 @@ export class UI {
   private popover = document.querySelector("#popover") as HTMLElement;
   private toastEl = document.querySelector("#toast") as HTMLElement;
   private boot = document.querySelector("#boot") as HTMLElement;
+  private confirmEnd = false;
+  private confirmWatch: string | null = null;
   private toastTimer = 0;
 
+  setClock(text: string) {
+    const node = this.rail.querySelector(".round-clock");
+    if (node) node.textContent = text;
+  }
+
   render(state: UiState) {
+    if (state.watchId !== this.confirmWatch) {
+      this.confirmEnd = false;
+      this.confirmWatch = state.watchId;
+    }
+    this.lastTop = state;
     this.workspace.classList.toggle("rail-collapsed", state.railCollapsed);
     this.renderTop(state);
     this.renderRail(state);
@@ -89,7 +110,9 @@ export class UI {
     clear(this.topbar);
     const brand = el("div", "brand");
     brand.append(el("span", "seal"));
-    brand.append(el("h1", undefined, "地价沙盘"));
+    const titles = el("div", "brand-titles");
+    titles.append(el("h1", undefined, "地价沙盘"));
+    brand.append(titles);
     const stats = el("div", "stats");
     const s = state.view.stats;
     stats.append(
@@ -99,6 +122,12 @@ export class UI {
       stat(s.covered + "/" + s.cells, "占地"),
       stat(String(s.spent), "花费"),
     );
+    const watching = state.rounds.find(round => round.id === state.watchId);
+    if (watching) {
+      const calls = tallyCalls(state.events);
+      stats.append(clockStat(fmtDuration(watching.startedAt, watching.endedAt), "用时"));
+      stats.append(stat(String(calls.total), "调用"));
+    }
     const actions = el("div", "top-actions");
     if (state.demolishMode || state.selectedType) {
       let armed = "拆除模式";
@@ -113,6 +142,7 @@ export class UI {
       tag.addEventListener("click", () => this.onCancelArm());
       actions.append(tag);
     }
+    const menu = this.roundMenu(state, watching);
     const build = el("button", "btn", "建造");
     build.type = "button";
     build.addEventListener("click", () => this.onOpenBuild());
@@ -122,7 +152,25 @@ export class UI {
     const config = el("button", "ghost", "配置");
     config.type = "button";
     config.addEventListener("click", () => this.onOpenConfig());
-    actions.append(build, streets, config);
+    const startLabel = !watching ? "开始" : watching.endedAt ? "结束" : this.confirmEnd ? "确认结束" : "结束";
+    const start = el("button", "btn" + (watching?.endedAt ? " is-disabled" : ""), startLabel);
+    start.type = "button";
+    start.disabled = !!watching?.endedAt;
+    start.addEventListener("click", () => {
+      if (watching?.endedAt) return;
+      if (!watching) {
+        this.askRoundName();
+        return;
+      }
+      if (!this.confirmEnd) {
+        this.confirmEnd = true;
+        this.renderTop(state);
+        return;
+      }
+      this.confirmEnd = false;
+      this.onEndRound();
+    });
+    actions.append(menu, build, streets, config, start);
     this.topbar.append(brand, stats, actions);
   }
 
@@ -139,16 +187,22 @@ export class UI {
     collapse.addEventListener("click", () => this.onToggleRail());
     head.append(collapse);
     const list = el("div", "rail-list");
-    if (!state.events.length) list.append(el("p", "rail-empty", "还没有操作。MCP 连上之后，每一步会出现在这里。"));
+    if (!state.watchId) list.append(el("p", "rail-empty", "这是出题盘。开始一局之后，模型的操作会出现在那一局的步骤里。"));
+    else if (!state.events.length) list.append(el("p", "rail-empty", "这一局还没有调用。把编号给模型，它带上 roundId 之后，每一步会出现在这里。"));
     let stepNo = 0;
     for (const event of state.events) {
       if (event.canScrub) stepNo++;
-      if (event.tool === "place_building" || event.tool === "demolish_building") {
+      if (event.tool === "place_building" || event.tool === "demolish_building" || event.tool === "finish_round") {
         const card = el("button", "step" + (event.ok ? "" : " fail") + (event.canScrub ? " scrubbable" : "") + (state.scrubId === event.id ? " active" : ""));
         card.type = "button";
         if (event.accent) card.style.borderLeftColor = event.accent;
         card.append(el("strong", undefined, event.canScrub ? stepNo + "  " + event.headline : event.headline));
-        if (event.reason) card.append(el("p", "reason", event.reason));
+        if (event.reason) {
+          const reason = el("p", "reason");
+          reason.append(el("span", "kicker", event.tool === "demolish_building" ? "拆除理由" : event.tool === "finish_round" ? "交卷理由" : "放置理由"));
+          reason.append(document.createTextNode(event.reason));
+          card.append(reason);
+        }
         if (event.detail) card.append(el("p", "detail", event.detail));
         if (event.statsLine) card.append(el("p", "snap", event.statsLine));
         if (event.canScrub) card.addEventListener("click", () => this.onScrub(event.id));
@@ -168,6 +222,97 @@ export class UI {
     }
     body.append(head, list);
     this.rail.append(tab, body);
+  }
+
+  private roundMenu(state: UiState, watching: RoundMeta | undefined) {
+    const wrap = el("div", "round-menu" + (this.menuOpen ? " open" : ""));
+    const label = watching ? watching.name + " · " + roundMark(watching) : "出题盘";
+    const current = el("button", "ghost round-current", label);
+    current.type = "button";
+    current.title = label;
+    current.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.menuOpen = !this.menuOpen;
+      this.renderTop(state);
+    });
+    wrap.append(current);
+    if (!this.menuOpen) return wrap;
+    const list = el("div", "round-list");
+    list.append(this.roundChoice(state, "出题盘", null, !state.watchId));
+    for (const round of state.rounds) {
+      const row = el("div", "round-row" + (state.watchId === round.id ? " current" : ""));
+      const name = el("button", "round-name", round.name + " · " + roundMark(round));
+      name.type = "button";
+      name.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.closeMenu();
+        this.onWatchRound(round.id);
+      });
+      const code = el("span", "round-code", round.id.slice(0, 8));
+      code.title = round.id;
+      code.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.onCopyRound(round.id);
+      });
+      const del = el("span", "round-del", this.confirmDelete === round.id ? "确认" : "删除");
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this.confirmDelete !== round.id) {
+          this.confirmDelete = round.id;
+          this.renderTop(state);
+          return;
+        }
+        this.confirmDelete = "";
+        this.closeMenu();
+        this.onDeleteRound(round.id);
+      });
+      row.append(name, code, del);
+      list.append(row);
+    }
+    wrap.append(list);
+    this.armMenuCloser();
+    return wrap;
+  }
+
+  private closeMenu() {
+    this.menuOpen = false;
+    this.confirmDelete = "";
+  }
+
+  private armMenuCloser() {
+    if (this.menuCloser) return;
+    this.menuCloser = (e: MouseEvent) => {
+      if (!this.menuOpen) return;
+      const menu = this.topbar.querySelector(".round-menu");
+      if (menu?.contains(e.target as Node)) return;
+      this.closeMenu();
+      if (!this.lastTop) return;
+      this.renderTop(this.lastTop);
+    };
+    document.addEventListener("click", this.menuCloser);
+  }
+
+  private lastTop: UiState | null = null;
+  private menuCloser: ((e: MouseEvent) => void) | null = null;
+
+  private roundChoice(state: UiState, label: string, id: string | null, current: boolean) {
+    const row = el("button", "round-row" + (current ? " current" : ""), label);
+    row.type = "button";
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.closeMenu();
+      this.onWatchRound(id);
+    });
+    return row;
+  }
+
+  private askRoundName() {
+    const dialog = document.querySelector("#round-name") as HTMLDialogElement | null;
+    if (!dialog) return;
+    const input = dialog.querySelector("input") as HTMLInputElement;
+    input.value = "";
+    dialog.showModal();
+    input.focus();
   }
 
   private renderScrub(state: UiState) {
@@ -253,10 +398,43 @@ export class UI {
   }
 }
 
+function roundMark(round: RoundMeta) {
+  if (round.endedBy === "model") return "模型结束";
+  if (round.endedBy === "human") return "人工结束";
+  return "进行中";
+}
+
+function clockStat(value: string, label: string) {
+  const node = stat(value, label);
+  node.querySelector("b")?.classList.add("round-clock");
+  return node;
+}
+
 function stat(value: string, label: string) {
   const node = el("div", "stat");
   node.append(el("b", "num", value), el("span", undefined, label));
   return node;
+}
+
+function toolLabel(tool: string) {
+  if (tool === "get_objectives") return "目标";
+  if (tool === "get_street_dictionary") return "词典";
+  if (tool === "list_buildings") return "建筑";
+  if (tool === "get_map") return "地图";
+  if (tool === "place_building") return "放置";
+  if (tool === "demolish_building") return "拆除";
+  if (tool === "finish_round") return "交卷";
+  return tool;
+}
+
+function fmtDuration(startedAt: number, endedAt: number | null) {
+  const ms = Math.max(0, (endedAt ?? Date.now()) - startedAt);
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return (h ? h + ":" : "") + p(m) + ":" + p(sec);
 }
 
 function countSteps(events: KanbanEvent[]) {

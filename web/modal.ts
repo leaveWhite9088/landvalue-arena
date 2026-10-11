@@ -156,7 +156,9 @@ export class Modal {
   }
 
   private paintSaves(panel: HTMLElement) {
-    const name = textInput("存档名称");
+    panel.append(el("p", "hint", "这里保存的是出题盘。开局会按当时的出题盘原样复制。已结束的对局在顶栏下拉里打开。"));
+    const name = textInput("存档名称", 64);
+    name.classList.add("save-name");
     const save = el("button", "btn", "保存存档");
     save.type = "button";
     save.addEventListener("click", () => {
@@ -172,7 +174,8 @@ export class Modal {
       const grow = el("div", "grow");
       grow.append(el("div", undefined, sv.name));
       const d = new Date(sv.time);
-      grow.append(el("small", undefined, stamp(d) + "  总地价 " + fmtNum(sv.snapshot.total) + "  花费 " + sv.snapshot.spent));
+      const mark = sv.endedBy === "model" ? "  · 模型结束" : sv.endedBy === "human" ? "  · 人工结束" : "";
+      grow.append(el("small", undefined, stamp(d) + "  总地价 " + fmtNum(sv.snapshot.total) + "  花费 " + sv.snapshot.spent + mark));
       const load = el("button", "ghost", "加载");
       load.type = "button";
       load.addEventListener("click", () => this.send({ type: "load", id: sv.id }));
@@ -182,7 +185,6 @@ export class Modal {
       item.append(grow, load, del);
       panel.append(item);
     }
-    const tools = el("div", "danger-row");
     const exp = el("button", "ghost", "导出配置");
     exp.type = "button";
     exp.addEventListener("click", () => this.send({ type: "export" }));
@@ -218,6 +220,7 @@ export class Modal {
       this.confirming = null;
       this.send({ type: "reset" });
     });
+    const tools = el("div", "danger-row");
     tools.append(exp, imp, file, clearBtn, reset);
     panel.append(tools);
   }
@@ -229,11 +232,11 @@ function field(label: string, input: HTMLElement) {
   return wrap;
 }
 
-export function textInput(placeholder: string) {
+export function textInput(placeholder: string, maxLength = 12) {
   const input = el("input") as HTMLInputElement;
   input.type = "text";
   input.placeholder = placeholder;
-  input.maxLength = 12;
+  input.maxLength = maxLength;
   return input;
 }
 

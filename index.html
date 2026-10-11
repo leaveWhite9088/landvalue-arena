@@ -12,11 +12,36 @@
   <div id="workspace" class="rail-collapsed">
     <div id="stage">
       <canvas id="board" aria-label="地价沙盘"></canvas>
+      <div id="lenses"></div>
+      <div id="camera" hidden>
+        <button type="button" id="cam-back" class="cam-btn">返回总览</button>
+        <div class="cam-move" aria-label="移动视角">
+          <button type="button" class="cam-btn" data-pan="0,80" aria-label="上移">上</button>
+          <button type="button" class="cam-btn" data-pan="80,0" aria-label="左移">左</button>
+          <button type="button" class="cam-btn" data-pan="-80,0" aria-label="右移">右</button>
+          <button type="button" class="cam-btn" data-pan="0,-80" aria-label="下移">下</button>
+        </div>
+        <div class="cam-zoom" aria-label="缩放">
+          <button type="button" class="cam-btn" id="cam-out" aria-label="缩小">−</button>
+          <button type="button" class="cam-btn" id="cam-in" aria-label="放大">+</button>
+        </div>
+      </div>
       <div id="scrub" hidden></div>
       <div id="hover" hidden></div>
     </div>
     <aside id="rail"></aside>
   </div>
+  <dialog id="round-name">
+    <form method="dialog" class="name-form">
+      <h2>开始一局</h2>
+      <p class="hint">按当前出题盘原样复制一份，场上建筑一并带上。</p>
+      <input type="text" name="round" maxlength="64" placeholder="对局名称" required>
+      <div class="row">
+        <button class="btn" value="ok">开始</button>
+        <button class="ghost" type="button" value="cancel">取消</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="build"></dialog>
   <dialog id="config"></dialog>
   <div id="popover" class="popover" hidden></div>

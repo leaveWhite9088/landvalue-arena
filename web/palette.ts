@@ -125,9 +125,11 @@ export class Palette {
     const row = el("div", "row");
     row.append(name, shape, cost, add);
     panel.append(row);
+    panel.append(el("p", "count-line", "共 " + view.buildings.length + " 个建筑"));
     if (!view.buildings.length) panel.append(el("p", "hint", "还没有建筑。"));
     for (const b of view.buildings) {
-      const item = el("div", "item");
+      const item = el("div", "item catalog-item");
+      item.append(thumb(b.image, b.name, b.color));
       const fields = el("div", "item-fields");
       const nm = textInput(b.name);
       nm.value = b.name;
@@ -203,9 +205,16 @@ export class Palette {
     line2.append(...slots);
     draft.append(line1, line2);
     panel.append(draft);
+    panel.append(el("p", "count-line", "共 " + view.streets.length + " 条专业街"));
     if (!view.streets.length) panel.append(el("p", "hint", "一条街是三种建筑加一个周围地价加成。"));
     for (const st of view.streets) {
       const item = el("div", "street-item");
+      const faces = el("div", "street-faces");
+      for (const id of st.types) {
+        const b = view.buildings.find(item => item.id === id);
+        faces.append(thumb(b?.image, b?.name ?? "", b?.color));
+      }
+      item.append(faces);
       const nm = textInput(st.name);
       nm.value = st.name;
       nm.addEventListener("change", () => this.send({ type: "updateStreet", id: st.id, name: nm.value }));
@@ -230,4 +239,17 @@ export class Palette {
       panel.append(item);
     }
   }
+}
+
+function thumb(src: string | undefined, name: string, color?: string) {
+  const wrap = el("span", "catalog-thumb");
+  if (src) {
+    const img = document.createElement("img");
+    img.src = src;
+    img.alt = name;
+    wrap.append(img);
+  } else {
+    wrap.style.background = color || "#e7dccb";
+  }
+  return wrap;
 }

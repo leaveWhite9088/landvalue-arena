@@ -11,6 +11,8 @@ type Pt = { x: number; y: number };
 type Slot = { board: number; rows: number; cols: number; ox: number; oy: number };
 type Box = { minX: number; maxX: number; minY: number; maxY: number; w: number; h: number };
 
+export type LensMark = { board: number; x: number; y: number };
+
 export class Scene {
   private ctx: CanvasRenderingContext2D;
   private view: ViewModel | null = null;
@@ -23,7 +25,16 @@ export class Scene {
   private originX = 0;
   private originY = 0;
   private dpr = 1;
+  private focus: number | null = null;
+  private zoom = 1;
+  private panX = 0;
+  private panY = 0;
+  private panning = false;
+  private panMoved = false;
+  private lastPx = 0;
+  private lastPy = 0;
   onCell: (cell: Coord | null, kind: "move" | "click" | "context", x: number, y: number) => void = () => {};
+  onLenses: (marks: LensMark[]) => void = () => {};
 
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d");
@@ -72,6 +83,33 @@ export class Scene {
     this.draw();
   }
 
+  setFocus(board: number | null) {
+    const next = board != null && this.view?.boards.some(b => b.board === board) ? board : null;
+    if (next === this.focus) return;
+    this.focus = next;
+    this.zoom = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.draw();
+  }
+
+  focused(): number | null {
+    return this.focus;
+  }
+
+  panBy(dx: number, dy: number) {
+    if (this.focus == null) return;
+    this.panX += dx;
+    this.panY += dy;
+    this.draw();
+  }
+
+  zoomBy(factor: number) {
+    if (this.focus == null) return;
+    this.zoom = Math.min(4, Math.max(0.7, this.zoom * factor));
+    this.draw();
+  }
+
   private load(src: string) {
     if (this.images.has(src)) return;
     const img = new Image();
@@ -98,17 +136,19 @@ export class Scene {
       minY = Math.min(minY, p.y);
       maxY = Math.max(maxY, p.y);
     }
-    minY -= HW * 1.55;
+    minY -= this.focus == null ? HW * 1.15 : HW * 1.55;
+    if (this.focus == null) maxY += 52;
     return { minX, maxX, minY, maxY, w: maxX - minX, h: maxY - minY };
   }
 
   private arrange(view: ViewModel): Slot[] {
-    const boxes = view.boards.map(b => this.boardBox(b.rows, b.cols));
-    const cols = view.boards.length <= 1 ? 1 : 2;
-    const gap = 48;
+    const boards = this.focus == null ? view.boards : view.boards.filter(b => b.board === this.focus);
+    const boxes = boards.map(b => this.boardBox(b.rows, b.cols));
+    const cols = boards.length <= 1 ? 1 : 2;
+    const gap = this.focus == null ? 18 : 48;
     const colW = Math.max(...boxes.map(b => b.w), 1);
     const rowH = Math.max(...boxes.map(b => b.h), 1);
-    return view.boards.map((b, i) => {
+    return boards.map((b, i) => {
       const box = boxes[i];
       const col = i % cols;
       const row = Math.floor(i / cols);
@@ -144,13 +184,41 @@ export class Scene {
     }
     const bw = Math.max(1, maxX - minX);
     const bh = Math.max(1, maxY - minY);
-    this.scale = Math.min((w - 28) / bw, (h - 36) / bh);
+    const bottomPad = this.focus == null ? 8 : 72;
+    const sidePad = this.focus == null ? 12 : 36;
+    this.scale = Math.min((w - sidePad) / bw, (h - bottomPad) / bh);
     this.originX = w / 2 - ((minX + maxX) / 2) * this.scale;
-    this.originY = h / 2 - ((minY + maxY) / 2) * this.scale + 6;
+    this.originY = h / 2 - ((minY + maxY) / 2) * this.scale + (this.focus == null ? 0 : -16);
   }
 
   private toScreen(p: Pt, slot: Slot): Pt {
-    return { x: this.originX + (p.x + slot.ox) * this.scale, y: this.originY + (p.y + slot.oy) * this.scale };
+    const fitted = {
+      x: this.originX + (p.x + slot.ox) * this.scale,
+      y: this.originY + (p.y + slot.oy) * this.scale,
+    };
+    if (this.focus == null) return fitted;
+    const cx = this.canvas.clientWidth / 2;
+    const cy = this.canvas.clientHeight / 2;
+    return {
+      x: cx + (fitted.x - cx) * this.zoom + this.panX,
+      y: cy + (fitted.y - cy) * this.zoom + this.panY,
+    };
+  }
+
+  private unproject(clientX: number, clientY: number): { x: number; y: number } | null {
+    const rect = this.canvas.getBoundingClientRect();
+    let sx = clientX - rect.left;
+    let sy = clientY - rect.top;
+    if (this.focus != null) {
+      const cx = this.canvas.clientWidth / 2;
+      const cy = this.canvas.clientHeight / 2;
+      sx = cx + (sx - this.panX - cx) / this.zoom;
+      sy = cy + (sy - this.panY - cy) / this.zoom;
+    }
+    return {
+      x: (sx - this.originX) / this.scale,
+      y: (sy - this.originY) / this.scale,
+    };
   }
 
   private slotOf(board: number): Slot | undefined {
@@ -160,12 +228,11 @@ export class Scene {
   private pick(clientX: number, clientY: number): Coord | null {
     const view = this.view;
     if (!view) return null;
-    const rect = this.canvas.getBoundingClientRect();
-    const sx = (clientX - rect.left - this.originX) / this.scale;
-    const sy = (clientY - rect.top - this.originY) / this.scale;
+    const world = this.unproject(clientX, clientY);
+    if (!world) return null;
     for (const slot of this.slots) {
-      const x = sx - slot.ox;
-      const y = sy - slot.oy;
+      const x = world.x - slot.ox;
+      const y = world.y - slot.oy;
       const c = (x / HW + y / HH) / 2;
       const r = (y / HH - x / HW) / 2;
       const cell = { board: slot.board, r: Math.floor(r), c: Math.floor(c) };
@@ -210,6 +277,14 @@ export class Scene {
     }
     for (const slot of this.slots) this.drawLabel(slot);
     this.drawLegend(view);
+    if (this.focus == null) {
+      this.onLenses(this.slots.map(slot => {
+        const bottom = this.toScreen(this.raw(slot.rows + 1.45, slot.cols + 1.45), slot);
+        return { board: slot.board, x: bottom.x, y: bottom.y + 8 };
+      }));
+    } else {
+      this.onLenses([]);
+    }
   }
 
   private drawLabel(slot: Slot) {
@@ -359,14 +434,42 @@ export class Scene {
   }
 
   private bind() {
+    this.canvas.addEventListener("pointerdown", (e) => {
+      if (this.focus == null || e.button !== 0) return;
+      this.panning = true;
+      this.panMoved = false;
+      this.lastPx = e.clientX;
+      this.lastPy = e.clientY;
+    });
     this.canvas.addEventListener("pointermove", (e) => {
+      if (this.panning) {
+        const dx = e.clientX - this.lastPx;
+        const dy = e.clientY - this.lastPy;
+        if (Math.abs(dx) + Math.abs(dy) > 3) this.panMoved = true;
+        this.lastPx = e.clientX;
+        this.lastPy = e.clientY;
+        if (this.panMoved) this.panBy(dx, dy);
+        return;
+      }
       this.onCell(this.pick(e.clientX, e.clientY), "move", e.clientX, e.clientY);
     });
-    this.canvas.addEventListener("pointerleave", () => this.onCell(null, "move", 0, 0));
+    this.canvas.addEventListener("pointerleave", () => {
+      this.panning = false;
+      this.onCell(null, "move", 0, 0);
+    });
     this.canvas.addEventListener("pointerup", (e) => {
       if (e.button !== 0) return;
+      const dragged = this.panMoved;
+      this.panning = false;
+      this.panMoved = false;
+      if (dragged) return;
       this.onCell(this.pick(e.clientX, e.clientY), "click", e.clientX, e.clientY);
     });
+    this.canvas.addEventListener("wheel", (e) => {
+      if (this.focus == null) return;
+      e.preventDefault();
+      this.zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12);
+    }, { passive: false });
     this.canvas.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       this.onCell(this.pick(e.clientX, e.clientY), "context", e.clientX, e.clientY);
