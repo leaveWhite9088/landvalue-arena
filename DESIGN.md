@@ -163,7 +163,9 @@ MCP 只能放置和拆除，外加三条只读工具。适配若收到别的命�
 - `prices[]`：仅启用格，`r`、`c`、`price`（已舍入）、`bonuses`（这一格吃到的每一笔增益：`kind` 为 `innate` 或 `street`，`name`、`pct`，固有光环另带 `at`）
 - `formations[]`：`streetId`、`name`、`pct`、`instanceIds`
 - `spent`
-- `stats`：`total`、`max`、`repeat`、`placed`、`cells`、`covered`
+- `stats`：`total`、`max`、`repeat`、`placed`、`cells`、`covered`、`score`
+
+`score` 是综合得分：`总地价 + 最高地价×2 − 重复次数×100 − 累计花费`，最终成绩，越高越好。UI 顶栏和每次调用的快照行也显示它。
 
 ### place_building
 

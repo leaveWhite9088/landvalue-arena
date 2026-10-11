@@ -373,6 +373,20 @@ ui.onEndRound = () => {
     paint();
   }).catch(() => ui.toast("没有连上沙盘服务。"));
 };
+ui.onResumeRound = id => {
+  void net.round("resume", { roundId: id }).then(result => {
+    if (!result.ok) ui.toast(result.error?.message ?? "没有继续。");
+    else ui.toast("这一局已重新打开，可以继续玩。");
+    paint();
+  }).catch(() => ui.toast("没有连上沙盘服务。"));
+};
+ui.onRenameRound = (id, name) => {
+  void net.round("rename", { roundId: id, name }).then(result => {
+    if (!result.ok) ui.toast(result.error?.message ?? "没有改名。");
+    else ui.toast("已改名。");
+    paint();
+  }).catch(() => ui.toast("没有连上沙盘服务。"));
+};
 ui.onWatchRound = id => enterWatch(id);
 ui.onToggleRail = () => {
   railCollapsed = !railCollapsed;
@@ -458,11 +472,9 @@ document.addEventListener("click", (e) => {
 window.setInterval(() => {
   const round = rounds.find(item => item.id === watchId);
   if (!round || round.endedAt) return;
-  const ms = Date.now() - round.startedAt;
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
+  const s = Math.floor(Math.max(0, Date.now() - round.startedAt) / 1000);
   const p = (n: number) => String(n).padStart(2, "0");
-  ui.setClock(p(m) + ":" + p(s % 60));
+  ui.setClock(p(Math.floor(s / 3600)) + ":" + p(Math.floor((s % 3600) / 60)) + ":" + p(s % 60));
 }, 1000);
 
 window.addEventListener("resize", () => scene.resize());

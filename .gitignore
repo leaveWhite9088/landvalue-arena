@@ -3,3 +3,5 @@ dist/
 data/
 素材/
 *.tsbuildinfo
+.playwright-mcp/
+.tmp-revert.py

@@ -28,6 +28,8 @@ export class UI {
   onScrub: (id: string | null) => void = () => {};
   onStartRound: (name: string, model: string) => void = () => {};
   onEndRound: () => void = () => {};
+  onResumeRound: (id: string) => void = () => {};
+  onRenameRound: (id: string, name: string) => void = () => {};
   onWatchRound: (id: string | null) => void = () => {};
   onDeleteRound: (id: string) => void = () => {};
   onCopyRound: (id: string) => void = () => {};
@@ -116,6 +118,7 @@ export class UI {
     const stats = el("div", "stats");
     const s = state.view.stats;
     stats.append(
+      stat(fmtNum(s.score), "得分"),
       stat(fmtNum(s.total), "总地价"),
       stat(fmtNum(s.max), "最高"),
       stat(String(s.repeat), "重复"),
@@ -152,12 +155,14 @@ export class UI {
     const config = el("button", "ghost", "配置");
     config.type = "button";
     config.addEventListener("click", () => this.onOpenConfig());
-    const startLabel = !watching ? "开始" : watching.endedAt ? "结束" : this.confirmEnd ? "确认结束" : "结束";
-    const start = el("button", "btn" + (watching?.endedAt ? " is-disabled" : ""), startLabel);
+    const startLabel = !watching ? "开始" : watching.endedAt ? "继续" : this.confirmEnd ? "确认结束" : "结束";
+    const start = el("button", "btn", startLabel);
     start.type = "button";
-    start.disabled = !!watching?.endedAt;
     start.addEventListener("click", () => {
-      if (watching?.endedAt) return;
+      if (watching?.endedAt) {
+        this.onResumeRound(watching.id);
+        return;
+      }
       if (!watching) {
         this.askRoundName();
         return;
@@ -175,6 +180,12 @@ export class UI {
   }
 
   private renderRail(state: UiState) {
+    // 重渲染会重建列表，先记住滚动位置；贴底时保持贴底，否则留在原处
+    const oldList = this.rail.querySelector(".rail-list");
+    const oldTop = oldList ? oldList.scrollTop : null;
+    const wasAtBottom = oldList
+      ? oldList.scrollHeight - oldList.scrollTop - oldList.clientHeight < 24
+      : true;
     clear(this.rail);
     const watching = state.rounds.find(round => round.id === state.watchId);
     const who = modelOf(watching?.model);
@@ -201,6 +212,10 @@ export class UI {
     }
     body.append(head, list);
     this.rail.append(tab, body);
+    if (oldTop != null && !state.railCollapsed) {
+      if (wasAtBottom) list.scrollTop = list.scrollHeight;
+      else list.scrollTop = oldTop;
+    }
   }
 
   private chatMessage(state: UiState, event: KanbanEvent, who: ReturnType<typeof modelOf>, stepNo: number) {
@@ -220,7 +235,6 @@ export class UI {
     bubble.append(el("strong", undefined, event.canScrub ? stepNo + "  " + event.headline : event.headline));
     if (event.reason) bubble.append(el("p", "reason", event.reason));
     if (event.detail) bubble.append(el("p", "detail", event.detail));
-    if (event.statsLine) bubble.append(el("p", "snap", event.statsLine));
     if (event.payload) {
       const pre = el("pre", undefined, JSON.stringify(event.payload, null, 2));
       bubble.append(pre);
@@ -230,6 +244,12 @@ export class UI {
       else if (event.payload) bubble.classList.toggle("open");
     });
     main.append(name, bubble);
+    // 盘面快照不进气泡，作为气泡之间的分隔行，样式另立
+    if (event.statsLine) {
+      const snap = el("div", "msg-snap");
+      snap.append(el("span", undefined, event.statsLine));
+      main.append(snap);
+    }
     msg.append(avatar, main);
     return msg;
   }
@@ -268,6 +288,22 @@ export class UI {
         e.stopPropagation();
         this.onCopyRound(round.id);
       });
+      const edit = el("span", "round-edit", "改名");
+      edit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const next = window.prompt("新的对局名称", round.name);
+        if (next == null) return;
+        this.closeMenu();
+        this.onRenameRound(round.id, next);
+        this.renderTop(state);
+      });
+      const resume = round.endedAt ? el("span", "round-edit", "继续") : null;
+      resume?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.closeMenu();
+        this.onResumeRound(round.id);
+        this.renderTop(state);
+      });
       const del = el("span", "round-del", this.confirmDelete === round.id ? "确认" : "删除");
       del.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -280,8 +316,8 @@ export class UI {
         this.closeMenu();
         this.onDeleteRound(round.id);
       });
-      if (who) row.append(face(who.avatar), name, code, del);
-      else row.append(name, code, del);
+      if (who) row.append(face(who.avatar), name, code, ...(resume ? [resume] : []), edit, del);
+      else row.append(name, code, ...(resume ? [resume] : []), edit, del);
       list.append(row);
     }
     wrap.append(list);
@@ -477,7 +513,7 @@ function fmtDuration(startedAt: number, endedAt: number | null) {
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
   const p = (n: number) => String(n).padStart(2, "0");
-  return (h ? h + ":" : "") + p(m) + ":" + p(sec);
+  return p(h) + ":" + p(m) + ":" + p(sec);
 }
 
 function countSteps(events: KanbanEvent[]) {

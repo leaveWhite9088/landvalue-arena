@@ -335,11 +335,30 @@ button { cursor: pointer; }
 
 .msg-bubble strong { display: block; font-weight: 600; font-size: 13.5px; }
 .msg-bubble .reason { margin: 6px 0 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
-.msg-bubble .detail, .msg-bubble .snap {
+.msg-bubble .detail {
   margin: 4px 0 0;
   font-size: 12px;
   color: #888;
   font-variant-numeric: tabular-nums;
+}
+
+/* 盘面快照行：不进气泡，作为两条消息之间的分隔 */
+.msg-snap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 2px;
+  font-size: 11px;
+  color: #a8a8a8;
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-snap span { min-width: 0; }
+
+.msg-snap::before, .msg-snap::after {
+  content: "";
+  flex: 1 0 12px;
+  border-top: 1px solid #dcdcdc;
 }
 .msg-bubble pre {
   display: none;
@@ -479,6 +498,14 @@ button { cursor: pointer; }
   cursor: pointer;
 }
 
+.round-edit {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.round-edit:hover { color: var(--accent); }
 
 .name-form { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .name-form h2 { margin: 0; font-family: var(--font-display); font-size: 20px; }

@@ -433,6 +433,28 @@ async function endRoundByHuman(roundId: string) {
   return { ok: true as const, roundId: round.id, endedBy: "human" as const };
 }
 
+async function resumeRound(roundId: string) {
+  const round = roundOf(roundId);
+  if (!round) return { ok: false as const, error: errorOf("unknown_round") };
+  if (round.endedAt == null) return { ok: true as const, roundId: round.id };
+  round.endedAt = null;
+  round.endedBy = null;
+  await persistRounds();
+  broadcastRound(round);
+  return { ok: true as const, roundId: round.id };
+}
+
+async function renameRound(roundId: string, name: string) {
+  const round = roundOf(roundId);
+  if (!round) return { ok: false as const, error: errorOf("unknown_round") };
+  const trimmed = name.trim();
+  if (!trimmed) return { ok: false as const, error: errorOf("empty_name") };
+  if (trimmed.length > 64) return { ok: false as const, error: errorOf("bad_name", "对局名称最多 64 个字。") };
+  round.name = trimmed;
+  await persistRounds();
+  return { ok: true as const, roundId: round.id, name: round.name };
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -518,6 +540,17 @@ wss.on("connection", ws => {
         }
         if (action === "end") {
           const result = await endRoundByHuman(String(asked ?? ""));
+          send(ws, { type: "result", id: msg.id, ...result });
+          return;
+        }
+        if (action === "resume") {
+          const result = await resumeRound(String(asked ?? ""));
+          send(ws, { type: "result", id: msg.id, ...result });
+          return;
+        }
+        if (action === "rename") {
+          const named = msg as { name?: string };
+          const result = await renameRound(String(asked ?? ""), String(named.name ?? ""));
           send(ws, { type: "result", id: msg.id, ...result });
           return;
         }

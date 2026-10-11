@@ -229,14 +229,16 @@ export function computeStats(state: State, prices: Record<string, number>): Stat
   }
   const used = new Set(state.instances.map(i => i.typeId));
   const covered = state.instances.reduce((n, inst) => n + instanceCells(state, inst).length, 0);
+  const repeat = state.instances.length - used.size;
   return {
     total,
     max: cells ? max : 0,
-    repeat: state.instances.length - used.size,
+    repeat,
     placed: state.instances.length,
     cells,
     covered,
     spent: state.spent,
+    score: total + (cells ? max : 0) * 2 - repeat * 100 - state.spent,
   };
 }
 
@@ -245,6 +247,7 @@ export function displayStats(stats: Stats): Stats {
     ...stats,
     total: round1(stats.total),
     max: round1(stats.max),
+    score: round1(stats.score),
   };
 }
 
@@ -360,6 +363,7 @@ export function toMapSummary(view: ViewModel): MapSummary {
       placed: shown.placed,
       cells: shown.cells,
       covered: shown.covered,
+      score: shown.score,
     },
   };
 }
@@ -378,7 +382,8 @@ export function duplicateLabel(state: State): string {
 export function formatSnapshot(state: State): string {
   const view = buildView(state);
   const s = displayStats(view.stats);
-  return "总地价 " + fmtNum(s.total)
+  return "得分 " + fmtNum(s.score)
+    + " · 总地价 " + fmtNum(s.total)
     + " · 最高地价 " + fmtNum(s.max)
     + " · 重复建筑 " + s.repeat + duplicateLabel(state)
     + " · 花费 " + s.spent
