@@ -61,7 +61,8 @@ export function apply(state: State, command: UserCommand & { reason?: string; so
       if (!isPermutation(command.priorities)) return fail("bad_priorities");
       return { ok: true, state: { ...state, priorities: command.priorities } };
     case "clearBoard":
-      return { ok: true, state: { ...state, instances: [], spent: 0, spendLog: [] } };
+      // 落子花的钱不退：清空只移除建筑，累计花费保留
+      return { ok: true, state: { ...state, instances: [] } };
     case "reset":
       return { ok: true, state: defaultState() };
     case "import": {
