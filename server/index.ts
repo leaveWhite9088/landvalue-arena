@@ -380,16 +380,14 @@ function dayStamp(at: number): string {
 }
 
 async function startRound(version: string, model: string) {
-  // 名字 = 模型版本-日期-第x局；版本里已经带了厂家名就不要再拼一遍，避免 grokgrok4.7
-  let v = version.trim().replace(/\s+/g, "");
+  const v = version.trim().replace(/\s+/g, "");
   const picked = modelOf(model);
   if (!picked) return { ok: false as const, error: errorOf("unknown_model") };
-  if (v.toLowerCase().startsWith(picked.id)) v = v.slice(picked.id.length);
   if (!v) return { ok: false as const, error: errorOf("empty_name", "填一下模型版本。") };
   if (v.length > 12) return { ok: false as const, error: errorOf("bad_name", "模型版本最多 12 个字符。") };
   const day = dayStamp(Date.now());
   const seq = rounds.filter(r => r.model === picked.id && dayStamp(r.startedAt) === day).length + 1;
-  const name = picked.id + v + "-" + day + "-" + String(seq).padStart(2, "0");
+  const name = v + "-" + day + "-" + String(seq).padStart(2, "0");
   const now = Date.now();
   const round: RoundRecord = {
     id: crypto.randomUUID(),
