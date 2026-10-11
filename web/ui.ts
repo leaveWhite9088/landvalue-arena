@@ -270,6 +270,11 @@ export class UI {
     const tab = el("button", "rail-tab", "步骤" + (countSteps(state.events) ? " " + countSteps(state.events) : ""));
     tab.type = "button";
     tab.addEventListener("click", () => this.onToggleRail());
+    // 收起时只渲染拉手，一条消息都不进 DOM，从结构上杜绝消息漏到棋盘上
+    if (state.railCollapsed) {
+      this.rail.append(tab);
+      return;
+    }
     const body = el("div", "rail-body");
     const head = el("div", "rail-head");
     head.append(el("h2", undefined, "步骤"));
@@ -290,9 +295,12 @@ export class UI {
     }
     body.append(head, list);
     this.rail.append(tab, body);
-    if (oldTop != null && !state.railCollapsed) {
+    if (oldTop != null) {
       if (wasAtBottom) list.scrollTop = list.scrollHeight;
       else list.scrollTop = oldTop;
+    } else {
+      // 刚展开或首次渲染：直接贴底，看最新消息
+      list.scrollTop = list.scrollHeight;
     }
   }
 
