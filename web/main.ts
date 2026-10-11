@@ -122,6 +122,7 @@ function enterWatch(id: string | null) {
     watchView = result.view ?? null;
     watchEvents = result.events ?? [];
     paint();
+    requestAnimationFrame(() => { if (!railCollapsed) ui.scrollRail(); });
   }).catch(() => ui.toast("没有连上沙盘服务。"));
 }
 
@@ -219,9 +220,8 @@ net.onRound = msg => {
   if (watchId === msg.roundId) {
     watchView = msg.view;
     if (msg.event) watchEvents = watchEvents.concat(msg.event);
-    if (!railCollapsed || !suppressAuto) railCollapsed = false;
     paint();
-    ui.scrollRail();
+    if (!railCollapsed) ui.scrollRail();
   } else paint();
 };
 net.onEvents = next => {
@@ -322,8 +322,13 @@ const roundCancel = roundDialog.querySelector("button[value='cancel']") as HTMLB
 roundCancel.addEventListener("click", () => roundDialog.close("cancel"));
 roundDialog.addEventListener("close", () => {
   if (roundDialog.returnValue !== "ok") return;
-  const input = roundDialog.querySelector("input") as HTMLInputElement;
-  ui.onStartRound(input.value);
+  const input = roundDialog.querySelector("input[name=round]") as HTMLInputElement;
+  const picked = roundDialog.querySelector("input[name=model]:checked") as HTMLInputElement | null;
+  if (!picked) {
+    ui.toast("先选一个模型。");
+    return;
+  }
+  ui.onStartRound(input.value, picked.value);
 });
 ui.onDeleteRound = id => {
   void net.round("delete", { roundId: id }).then(result => {
@@ -338,8 +343,8 @@ ui.onDeleteRound = id => {
 ui.onCopyRound = id => {
   void navigator.clipboard.writeText(id).then(() => ui.toast("编号已复制。")).catch(() => ui.toast(id));
 };
-ui.onStartRound = name => {
-  void net.round("start", { name }).then(async result => {
+ui.onStartRound = (name, model) => {
+  void net.round("start", { name, model }).then(async result => {
     if (!result.ok) {
       ui.toast(result.error?.message ?? "没有开始。");
       return;
@@ -357,6 +362,7 @@ ui.onStartRound = name => {
       catch { ui.toast("对局已开始：" + result.roundId); }
     }
     paint();
+    requestAnimationFrame(() => ui.scrollRail());
   }).catch(() => ui.toast("没有连上沙盘服务。"));
 };
 ui.onEndRound = () => {
@@ -372,7 +378,10 @@ ui.onToggleRail = () => {
   railCollapsed = !railCollapsed;
   if (railCollapsed) suppressAuto = true;
   paint();
-  requestAnimationFrame(() => scene.resize());
+  requestAnimationFrame(() => {
+    scene.resize();
+    if (!railCollapsed) requestAnimationFrame(() => ui.scrollRail());
+  });
 };
 ui.onToggleFormations = () => {
   formationsOpen = !formationsOpen;

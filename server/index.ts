@@ -10,7 +10,7 @@ import {
   displayStats, fmtDelta, formatSnapshot, nid, objectivesOf, toMapSummary,
 } from "../shared/rules.ts";
 import type { EndedBy, KanbanEvent, RoundMeta, RoundRecord, SaveRecord, State, Stats, ToolName, UserCommand, ViewModel } from "../shared/types.ts";
-import { tallyCalls } from "../shared/types.ts";
+import { modelOf, tallyCalls } from "../shared/types.ts";
 import { loadEvents, loadRounds, loadSaves, loadState, saveEvents, saveMeta, saveRounds, saveSaves, saveState } from "./store.ts";
 
 const PORT = 26101;
@@ -52,6 +52,7 @@ function metaOf(round: RoundRecord): RoundMeta {
   return {
     id: round.id,
     name: round.name,
+    model: round.model,
     startedAt: round.startedAt,
     endedAt: round.endedAt,
     endedBy: round.endedBy,
@@ -394,13 +395,16 @@ async function closeRound(round: RoundRecord, endedBy: EndedBy) {
   broadcastRound(round);
 }
 
-async function startRound(name: string) {
+async function startRound(name: string, model: string) {
   const trimmed = name.trim();
+  const picked = modelOf(model);
   if (!trimmed) return { ok: false as const, error: errorOf("empty_name") };
   if (trimmed.length > 64) return { ok: false as const, error: errorOf("bad_name", "对局名称最多 64 个字。") };
+  if (!picked) return { ok: false as const, error: errorOf("unknown_model") };
   const round: RoundRecord = {
     id: crypto.randomUUID(),
     name: trimmed,
+    model: picked.id,
     startedAt: Date.now(),
     endedAt: null,
     endedBy: null,
@@ -507,7 +511,8 @@ wss.on("connection", ws => {
         const action = (msg as { action?: string; name?: string; roundId?: string }).action;
         const asked = (msg as { roundId?: string }).roundId;
         if (action === "start") {
-          const result = await startRound(String((msg as { name?: string }).name ?? ""));
+          const asked = msg as { name?: string; model?: string };
+          const result = await startRound(String(asked.name ?? ""), String(asked.model ?? ""));
           send(ws, { type: "result", id: msg.id, ...result });
           return;
         }

@@ -24,6 +24,7 @@ export function errorOf(code: string, message?: string, cells?: { board?: number
     invalid_import: "这不是一份有效的沙盘配置。",
     server_unavailable: "沙盘服务未启动。先在项目目录运行 npm run dev。",
     empty_name: "先写一个名称。",
+    unknown_model: "先选一个模型。",
   };
   return {
     code,

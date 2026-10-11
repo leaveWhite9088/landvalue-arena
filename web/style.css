@@ -14,7 +14,7 @@
   --font-display: "Songti SC", "STSong", "SimSun", "NSimSun", serif;
   --font-body: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   --top: 58px;
-  --rail: 380px;
+  --rail: 420px;
 }
 
 [hidden] { display: none !important; }
@@ -222,8 +222,10 @@ button { cursor: pointer; }
 
 #rail {
   border-left: 1px solid var(--line);
-  background: var(--paper);
+  background: #ededed;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -247,13 +249,134 @@ button { cursor: pointer; }
   flex-direction: column;
   min-height: 0;
   height: 100%;
+  background: #ededed;
 }
 
 .rail-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   padding: 12px 12px 8px;
+  background: #ededed;
+}
+
+.rail-head .text-btn { margin-left: auto; }
+
+.face {
+  width: 22px;
+  height: 22px;
+  object-fit: cover;
+  border-radius: 5px;
+  flex: none;
+}
+
+.rail-list {
+  overflow: auto;
+  padding: 12px 12px 16px;
+  min-height: 0;
+  background: #ededed;
+}
+
+.msg {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0 0 16px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.msg-avatar {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex: none;
+  background: #e4e0d8;
+}
+
+.msg-main { min-width: 0; flex: 1; }
+
+.msg-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+
+.msg-name b { font-size: 12px; font-weight: 400; color: #888; }
+.msg-name time { font-size: 11px; color: #aaa; font-variant-numeric: tabular-nums; }
+
+.msg-bubble {
+  position: relative;
+  display: inline-block;
+  width: auto;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: left;
+  border: 0;
+  background: #fff;
+  border-radius: 4px;
+  padding: 8px 10px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+}
+
+.msg-bubble::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 10px;
+  border: 6px solid transparent;
+  border-right-color: #fff;
+  border-left: 0;
+}
+
+.msg-bubble strong { display: block; font-weight: 600; font-size: 13.5px; }
+.msg-bubble .reason { margin: 6px 0 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
+.msg-bubble .detail, .msg-bubble .snap {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+}
+.msg-bubble pre {
+  display: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 6px 0 0;
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--ink);
+}
+.msg-bubble.open pre { display: block; }
+.msg.fail { opacity: 0.72; }
+.msg-bubble.scrubbable { cursor: pointer; }
+.msg.active .msg-bubble { box-shadow: 0 0 0 1px var(--accent); }
+.msg-bubble.scrubbable:hover { background: #fff; }
+
+.model-pick {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.model-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.model-opt input { position: absolute; opacity: 0; pointer-events: none; }
+.model-opt .face { width: 28px; height: 28px; border-radius: 6px; }
+.model-opt:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .rail-head h2 {
@@ -261,12 +384,6 @@ button { cursor: pointer; }
   font-family: var(--font-display);
   font-size: 16px;
   font-weight: 700;
-}
-
-.rail-list {
-  overflow: auto;
-  padding: 4px 12px 16px;
-  min-height: 0;
 }
 
 .rail-empty { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
@@ -292,7 +409,16 @@ button { cursor: pointer; }
 .round-menu { position: relative; }
 
 .round-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   white-space: nowrap;
+}
+
+.round-current .face {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
 }
 
 .round-list {
@@ -352,6 +478,7 @@ button { cursor: pointer; }
   color: var(--danger);
   cursor: pointer;
 }
+
 
 .name-form { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .name-form h2 { margin: 0; font-family: var(--font-display); font-size: 20px; }

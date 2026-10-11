@@ -160,10 +160,10 @@ MCP 只能放置和拆除，外加三条只读工具。适配若收到别的命�
 - `rows`、`cols`
 - `disabled[]`：`{ r, c }`
 - `instances[]`：`instanceId`、`typeId`、`name`、`w`、`h`、`anchor`、`cells`
-- `prices[]`：仅启用格，`r`、`c`、`price`（已舍入）
+- `prices[]`：仅启用格，`r`、`c`、`price`（已舍入）、`bonuses`（这一格吃到的每一笔增益：`kind` 为 `innate` 或 `street`，`name`、`pct`，固有光环另带 `at`）
 - `formations[]`：`streetId`、`name`、`pct`、`instanceIds`
 - `spent`
-- `stats`：`total`、`max`、`repeat`、`placed`、`cells`
+- `stats`：`total`、`max`、`repeat`、`placed`、`cells`、`covered`
 
 ### place_building
 

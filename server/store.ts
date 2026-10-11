@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultState, normalizeState } from "../shared/rules.ts";
 import type { KanbanEvent, RoundRecord, SaveMeta, SaveRecord, State } from "../shared/types.ts";
+import { modelOf } from "../shared/types.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
 
@@ -64,6 +65,7 @@ export async function loadRounds(): Promise<RoundRecord[]> {
     out.push({
       id: row.id,
       name: row.name,
+      model: modelOf(typeof row.model === "string" ? row.model : "")?.id ?? "",
       startedAt: typeof row.startedAt === "number" ? row.startedAt : Date.now(),
       endedAt: typeof row.endedAt === "number" ? row.endedAt : null,
       endedBy: row.endedBy === "human" || row.endedBy === "model" ? row.endedBy : null,

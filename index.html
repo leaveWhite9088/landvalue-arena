@@ -34,8 +34,9 @@
   <dialog id="round-name">
     <form method="dialog" class="name-form">
       <h2>开始一局</h2>
-      <p class="hint">按当前出题盘原样复制一份，场上建筑一并带上。</p>
+      <p class="hint">按当前出题盘原样复制一份，场上建筑一并带上。选好是哪个模型在下。</p>
       <input type="text" name="round" maxlength="64" placeholder="对局名称" required>
+      <div class="model-pick" id="model-pick"></div>
       <div class="row">
         <button class="btn" value="ok">开始</button>
         <button class="ghost" type="button" value="cancel">取消</button>

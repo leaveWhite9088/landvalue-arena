@@ -48,7 +48,7 @@ export class Net {
     return this.request({ type: "command", command });
   }
 
-  round(action: "start" | "end" | "watch" | "delete", extra: { name?: string; roundId?: string } = {}) {
+  round(action: "start" | "end" | "watch" | "delete", extra: { name?: string; model?: string; roundId?: string } = {}) {
     return this.request({ type: "round", action, ...extra });
   }
 

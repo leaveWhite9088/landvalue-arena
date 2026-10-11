@@ -182,12 +182,19 @@ export function computePrices(state: State, formations = findFormations(state)):
   for (const inst of state.instances) {
     const b = buildingOf(state, inst.typeId);
     const pct = innatePctOf(b?.w ?? 1, b?.h ?? 1);
-    const label = (b ? b.name : "建筑") + " @ 棋盘" + inst.board + " (" + inst.anchorR + "," + inst.anchorC + ")  固有";
+    const name = b ? b.name : "建筑";
+    const label = name + " @ 棋盘" + inst.board + " (" + inst.anchorR + "," + inst.anchorC + ")  固有";
     for (const cell of auraCells(state, inst)) {
       const k = cellKey(cell.board, cell.r, cell.c);
       if (prices[k] === undefined) continue;
       prices[k] *= 1 + pct / 100;
-      ledger[k].push({ label, pct });
+      ledger[k].push({
+        kind: "innate",
+        name,
+        pct,
+        at: { board: inst.board, r: inst.anchorR, c: inst.anchorC },
+        label,
+      });
     }
   }
 
@@ -202,11 +209,10 @@ export function computePrices(state: State, formations = findFormations(state)):
       for (const cell of auraCells(state, inst)) covered.add(cellKey(cell.board, cell.r, cell.c));
     }
     const mult = 1 + street.pct / 100;
-    const label = street.name;
     for (const k of covered) {
       if (prices[k] === undefined) continue;
       prices[k] *= mult;
-      ledger[k].push({ label, pct: street.pct });
+      ledger[k].push({ kind: "street", name: street.name, pct: street.pct, label: street.name });
     }
   }
   return { prices, ledger };
@@ -330,7 +336,20 @@ export function toMapSummary(view: ViewModel): MapSummary {
         anchor: { r: inst.anchorR, c: inst.anchorC },
         cells: inst.cells.map(c => ({ r: c.r, c: c.c })),
       })),
-      prices: view.cells.filter(c => c.board === board.board && c.enabled).map(c => ({ r: c.r, c: c.c, price: c.price })),
+      prices: view.cells.filter(c => c.board === board.board && c.enabled).map(c => {
+        const lines = view.ledger.find(l => l.board === c.board && l.r === c.r && l.c === c.c)?.lines ?? [];
+        return {
+          r: c.r,
+          c: c.c,
+          price: c.price,
+          bonuses: lines.map(line => ({
+            kind: line.kind,
+            name: line.name,
+            pct: line.pct,
+            ...(line.at ? { at: line.at } : {}),
+          })),
+        };
+      }),
     })),
     formations: view.formations,
     spent: view.spent,

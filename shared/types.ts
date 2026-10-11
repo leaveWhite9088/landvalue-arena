@@ -99,7 +99,13 @@ export type Stats = {
   spent: number;
 };
 
-export type LedgerLine = { label: string; pct: number };
+export type LedgerLine = {
+  label: string;
+  pct: number;
+  kind: "innate" | "street";
+  name: string;
+  at?: { board: number; r: number; c: number };
+};
 
 export type CellView = {
   board: number;
@@ -170,7 +176,12 @@ export type MapBoard = {
   cols: number;
   disabled: Cell[];
   instances: MapInstance[];
-  prices: { r: number; c: number; price: number }[];
+  prices: {
+    r: number;
+    c: number;
+    price: number;
+    bonuses: { kind: "innate" | "street"; name: string; pct: number; at?: { board: number; r: number; c: number } }[];
+  }[];
 };
 
 export type MapSummary = {
@@ -190,6 +201,21 @@ export type MapSummary = {
 
 export type AppError = { code: string; message: string; cells?: { board?: number; r: number; c: number }[] };
 
+export const MODELS = [
+  { id: "grok", name: "Grok", avatar: "/models/grok.png" },
+  { id: "minimax", name: "MiniMax", avatar: "/models/minimax.png" },
+  { id: "deepseek", name: "DeepSeek", avatar: "/models/deepseek.png" },
+  { id: "kimi", name: "Kimi", avatar: "/models/kimi.png" },
+  { id: "claude", name: "Claude", avatar: "/models/claude.png" },
+  { id: "chatgpt", name: "ChatGPT", avatar: "/models/chatgpt.png" },
+] as const;
+
+export type ModelId = (typeof MODELS)[number]["id"];
+
+export function modelOf(id: string | null | undefined) {
+  return MODELS.find(model => model.id === id);
+}
+
 export type EndedBy = "human" | "model";
 
 export type CallTally = {
@@ -201,6 +227,7 @@ export type CallTally = {
 export type RoundMeta = {
   id: string;
   name: string;
+  model: string;
   startedAt: number;
   endedAt: number | null;
   endedBy: EndedBy | null;
@@ -210,6 +237,7 @@ export type RoundMeta = {
 export type RoundRecord = {
   id: string;
   name: string;
+  model: string;
   startedAt: number;
   endedAt: number | null;
   endedBy: EndedBy | null;
@@ -290,7 +318,7 @@ export const MAP_NOTES = [
   "占用、禁用、固有光环、专业街成街与光环都不跨棋盘。同一条街可以在不同棋盘上各自成街一次。",
   "总地价、最高地价、重复次数、累计花费、占地是全部棋盘合计。重复按类型在全部棋盘上的座数计算，不按棋盘分开。",
   "建筑自身占的格子也吃到该建筑的固有加成，以及盖到它的专业街。同一条街在同一簇里对同一格只乘一次。",
-  "地价已由服务端算好。不要自己复利，用返回的 price 和 stats。",
+  "地价已由服务端算好。不要自己复利，用返回的 price、bonuses 和 stats。每一格的 bonuses 列出它吃到的每一笔固有光环和专业街。",
   "比较两个方案时调用 get_objectives。第 1 项最重要，持平再比下一项。不要假设总地价一定排第一。",
 ];
 
@@ -309,7 +337,7 @@ export const TOOLS: { name: ToolName; description: string }[] = [
   },
   {
     name: "get_map",
-    description: "读取这一局的全部棋盘。必须带 roundId。坐标是三元组 (board, row, col)，都从 1 计。最多 4 块，编号是 boards 的顺序，尺寸各自独立，以返回值为准。占用、光环、成街都不跨棋盘。返回每块的尺寸、禁用格、建筑和每格地价，以及这一局合计的总地价、最高地价、重复次数、累计花费、占地。地价已含建筑自身占地，不要自行复利。哪个指标最重要调用 get_objectives。不能用这个工具改配置。",
+    description: "读取这一局的全部棋盘。必须带 roundId。坐标是三元组 (board, row, col)，都从 1 计。最多 4 块，编号是 boards 的顺序，尺寸各自独立，以返回值为准。占用、光环、成街都不跨棋盘。返回每块的尺寸、禁用格、建筑，以及每个启用格的地价 price 和 bonuses。bonuses 是这一格吃到的每一笔增益：kind 为 innate 是某座建筑的固有光环，street 是某一条已生效的专业街；name 是来源，pct 是加成百分比，at 是固有光环那座建筑的棋盘和锚点。没有 bonuses 的启用格地价是 100。地价已由服务端算好，不要自行复利。同时返回这一局合计的总地价、最高地价、重复次数、累计花费、占地。哪个指标最重要调用 get_objectives。不能用这个工具改配置。",
   },
   {
     name: "place_building",

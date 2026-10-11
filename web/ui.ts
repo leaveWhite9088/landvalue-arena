@@ -1,6 +1,6 @@
 import { clear, el } from "./dom.ts";
 import type { Coord, KanbanEvent, RoundMeta, ViewModel } from "../shared/types.ts";
-import { fmtNum, shapeLabel, tallyCalls } from "../shared/types.ts";
+import { fmtNum, modelOf, MODELS, shapeLabel, tallyCalls } from "../shared/types.ts";
 
 export type UiState = {
   view: ViewModel;
@@ -26,7 +26,7 @@ export class UI {
   onToggleFormations: () => void = () => {};
   onEmphasis: (ids: string[] | null) => void = () => {};
   onScrub: (id: string | null) => void = () => {};
-  onStartRound: (name: string) => void = () => {};
+  onStartRound: (name: string, model: string) => void = () => {};
   onEndRound: () => void = () => {};
   onWatchRound: (id: string | null) => void = () => {};
   onDeleteRound: (id: string) => void = () => {};
@@ -47,7 +47,7 @@ export class UI {
   private toastTimer = 0;
 
   setClock(text: string) {
-    const node = this.rail.querySelector(".round-clock");
+    const node = document.querySelector(".round-clock");
     if (node) node.textContent = text;
   }
 
@@ -176,6 +176,8 @@ export class UI {
 
   private renderRail(state: UiState) {
     clear(this.rail);
+    const watching = state.rounds.find(round => round.id === state.watchId);
+    const who = modelOf(watching?.model);
     const tab = el("button", "rail-tab", "步骤" + (countSteps(state.events) ? " " + countSteps(state.events) : ""));
     tab.type = "button";
     tab.addEventListener("click", () => this.onToggleRail());
@@ -187,49 +189,60 @@ export class UI {
     collapse.addEventListener("click", () => this.onToggleRail());
     head.append(collapse);
     const list = el("div", "rail-list");
-    if (!state.watchId) list.append(el("p", "rail-empty", "这是出题盘。开始一局之后，模型的操作会出现在那一局的步骤里。"));
-    else if (!state.events.length) list.append(el("p", "rail-empty", "这一局还没有调用。把编号给模型，它带上 roundId 之后，每一步会出现在这里。"));
+    if (!state.watchId) list.append(el("p", "rail-empty", "这是出题盘。开始一局之后，模型的每次调用会发到那一局的步骤里。"));
+    else if (!state.events.length) {
+      const name = who?.name ?? "模型";
+      list.append(el("p", "rail-empty", "这一局还没有调用。把编号给" + name + "，它带上 roundId 之后，每次调用会发到这里。"));
+    }
     let stepNo = 0;
     for (const event of state.events) {
       if (event.canScrub) stepNo++;
-      if (event.tool === "place_building" || event.tool === "demolish_building" || event.tool === "finish_round") {
-        const card = el("button", "step" + (event.ok ? "" : " fail") + (event.canScrub ? " scrubbable" : "") + (state.scrubId === event.id ? " active" : ""));
-        card.type = "button";
-        if (event.accent) card.style.borderLeftColor = event.accent;
-        card.append(el("strong", undefined, event.canScrub ? stepNo + "  " + event.headline : event.headline));
-        if (event.reason) {
-          const reason = el("p", "reason");
-          reason.append(el("span", "kicker", event.tool === "demolish_building" ? "拆除理由" : event.tool === "finish_round" ? "交卷理由" : "放置理由"));
-          reason.append(document.createTextNode(event.reason));
-          card.append(reason);
-        }
-        if (event.detail) card.append(el("p", "detail", event.detail));
-        if (event.statsLine) card.append(el("p", "snap", event.statsLine));
-        if (event.canScrub) card.addEventListener("click", () => this.onScrub(event.id));
-        list.append(card);
-      } else {
-        const line = el("button", "read-line");
-        line.type = "button";
-        line.append(el("span", undefined, event.headline));
-        if (event.statsLine) line.append(el("span", "snap", event.statsLine));
-        if (event.payload) {
-          const pre = el("pre", undefined, JSON.stringify(event.payload, null, 2));
-          line.addEventListener("click", () => line.classList.toggle("open"));
-          line.append(pre);
-        }
-        list.append(line);
-      }
+      list.append(this.chatMessage(state, event, who, stepNo));
     }
     body.append(head, list);
     this.rail.append(tab, body);
   }
 
+  private chatMessage(state: UiState, event: KanbanEvent, who: ReturnType<typeof modelOf>, stepNo: number) {
+    const msg = el("article", "msg" + (event.ok ? "" : " fail") + (state.scrubId === event.id ? " active" : ""));
+    const avatar = document.createElement("img");
+    avatar.className = "msg-avatar";
+    avatar.alt = "";
+    if (who) avatar.src = who.avatar;
+    else avatar.hidden = true;
+    const main = el("div", "msg-main");
+    const name = el("div", "msg-name");
+    name.append(el("b", undefined, who?.name ?? "这一局"));
+    name.append(el("time", undefined, clockOf(event.at)));
+    const bubble = el("button", "msg-bubble" + (event.canScrub ? " scrubbable" : ""));
+    bubble.type = "button";
+    if (event.accent) bubble.style.borderLeftColor = event.accent;
+    bubble.append(el("strong", undefined, event.canScrub ? stepNo + "  " + event.headline : event.headline));
+    if (event.reason) bubble.append(el("p", "reason", event.reason));
+    if (event.detail) bubble.append(el("p", "detail", event.detail));
+    if (event.statsLine) bubble.append(el("p", "snap", event.statsLine));
+    if (event.payload) {
+      const pre = el("pre", undefined, JSON.stringify(event.payload, null, 2));
+      bubble.append(pre);
+    }
+    bubble.addEventListener("click", () => {
+      if (event.canScrub) this.onScrub(event.id);
+      else if (event.payload) bubble.classList.toggle("open");
+    });
+    main.append(name, bubble);
+    msg.append(avatar, main);
+    return msg;
+  }
+
   private roundMenu(state: UiState, watching: RoundMeta | undefined) {
     const wrap = el("div", "round-menu" + (this.menuOpen ? " open" : ""));
+    const who = modelOf(watching?.model);
     const label = watching ? watching.name + " · " + roundMark(watching) : "出题盘";
-    const current = el("button", "ghost round-current", label);
+    const current = el("button", "ghost round-current");
     current.type = "button";
-    current.title = label;
+    current.title = who ? label + " · " + who.name : label;
+    if (who) current.append(face(who.avatar));
+    current.append(document.createTextNode(label));
     current.addEventListener("click", (e) => {
       e.stopPropagation();
       this.menuOpen = !this.menuOpen;
@@ -240,8 +253,9 @@ export class UI {
     const list = el("div", "round-list");
     list.append(this.roundChoice(state, "出题盘", null, !state.watchId));
     for (const round of state.rounds) {
+      const who = modelOf(round.model);
       const row = el("div", "round-row" + (state.watchId === round.id ? " current" : ""));
-      const name = el("button", "round-name", round.name + " · " + roundMark(round));
+      const name = el("button", "round-name", round.name + (who ? " · " + who.name : "") + " · " + roundMark(round));
       name.type = "button";
       name.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -266,7 +280,8 @@ export class UI {
         this.closeMenu();
         this.onDeleteRound(round.id);
       });
-      row.append(name, code, del);
+      if (who) row.append(face(who.avatar), name, code, del);
+      else row.append(name, code, del);
       list.append(row);
     }
     wrap.append(list);
@@ -309,8 +324,22 @@ export class UI {
   private askRoundName() {
     const dialog = document.querySelector("#round-name") as HTMLDialogElement | null;
     if (!dialog) return;
-    const input = dialog.querySelector("input") as HTMLInputElement;
+    const input = dialog.querySelector("input[name=round]") as HTMLInputElement;
     input.value = "";
+    const pick = dialog.querySelector("#model-pick") as HTMLElement;
+    if (!pick.childElementCount) {
+      for (const model of MODELS) {
+        const label = el("label", "model-opt");
+        const radio = el("input") as HTMLInputElement;
+        radio.type = "radio";
+        radio.name = "model";
+        radio.value = model.id;
+        radio.required = true;
+        label.append(radio, face(model.avatar), el("span", undefined, model.name));
+        pick.append(label);
+      }
+    }
+    pick.querySelectorAll("input").forEach(node => { (node as HTMLInputElement).checked = false; });
     dialog.showModal();
     input.focus();
   }
@@ -396,6 +425,20 @@ export class UI {
       this.hover.append(btn);
     }
   }
+}
+
+function face(src: string) {
+  const img = document.createElement("img");
+  img.className = "face";
+  img.src = src;
+  img.alt = "";
+  return img;
+}
+
+function clockOf(at: number) {
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return p(d.getHours()) + ":" + p(d.getMinutes());
 }
 
 function roundMark(round: RoundMeta) {
