@@ -9,6 +9,8 @@ export type UiState = {
   rotated: boolean;
   demolishMode: boolean;
   selectedInstance: string | null;
+  /** 点击钉在左上角的格子卡片；null 表示跟随鼠标的悬浮态 */
+  pinnedCell: Coord | null;
   scrubId: string | null;
   railCollapsed: boolean;
   formationsOpen: boolean;
@@ -67,9 +69,11 @@ export class UI {
     this.renderScrub(state);
     this.renderPopover(state);
     this.renderRank(state);
-    if (state.selectedInstance) this.renderPinned(state);
-    else if (!this.hover.hidden && !this.hover.classList.contains("pinned")) {
-      /* follow-cursor card is updated by placeHover */
+    if (state.pinnedCell) this.renderPinned(state);
+    else if (this.hover.classList.contains("pinned")) {
+      // 钉住的卡片被取消：收起来，悬浮态由 placeHover 接管
+      this.hover.classList.remove("pinned");
+      this.hover.hidden = true;
     }
   }
 
@@ -512,12 +516,10 @@ export class UI {
   }
 
   private renderPinned(state: UiState) {
-    const inst = state.view.instances.find(i => i.id === state.selectedInstance);
-    if (!inst) {
-      this.hover.hidden = true;
-      return;
-    }
-    this.fillHover(state.view, { board: inst.board, r: inst.anchorR, c: inst.anchorC }, true);
+    const cell = state.pinnedCell;
+    if (!cell) return;
+    // 钉在左上角，超出屏幕也能看全
+    this.fillHover(state.view, cell, true);
     this.hover.style.left = "14px";
     this.hover.style.top = "14px";
   }
@@ -545,6 +547,7 @@ export class UI {
       for (const line of lines) ul.append(el("li", undefined, line.label + "  +" + line.pct + "%"));
       this.hover.append(ul);
     }
+    if (pinned) this.hover.append(el("p", "meta", "已钉在左上角，点空白处取消。"));
     if (pinned && inst) {
       const btn = el("button", "text-btn danger", "拆除这座");
       btn.type = "button";

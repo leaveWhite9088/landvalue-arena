@@ -32,6 +32,7 @@ let selectedType: string | null = null;
 let rotated = false;
 let demolishMode = false;
 let selectedInstance: string | null = null;
+let pinnedCell: Coord | null = null;
 let scrubId: string | null = null;
 let railCollapsed = true;
 let suppressAuto = false;
@@ -105,6 +106,7 @@ function enterWatch(id: string | null) {
   scrubId = null;
   focusBoard = null;
   selectedInstance = null;
+  pinnedCell = null;
   selectedType = null;
   demolishMode = false;
   scene.clearGhost();
@@ -153,6 +155,7 @@ function paint() {
     rotated,
     demolishMode,
     selectedInstance,
+    pinnedCell,
     scrubId,
     railCollapsed,
     formationsOpen,
@@ -266,14 +269,23 @@ scene.onCell = (cell, kind, x, y) => {
       const preview = previewPlacement(live, selectedType, cell.board, cell.r, cell.c, rotated);
       scene.setGhost(preview.cells, preview.ok);
     } else scene.clearGhost();
-    ui.placeHover(view, cell, x, y, !!selectedInstance && !scrubId && !demolishMode);
+    ui.placeHover(view, cell, x, y, !!pinnedCell && !scrubId && !demolishMode);
     return;
   }
   if (kind === "context") {
     if (cell) demolishAt(cell);
     return;
   }
-  if (scrubId || !cell || !live) return;
+  if (scrubId || !live) return;
+  if (!cell) {
+    // 点空白处：取消左上角钉住的格子卡片
+    if (pinnedCell || selectedInstance) {
+      pinnedCell = null;
+      selectedInstance = null;
+      paint();
+    }
+    return;
+  }
   if (demolishMode) {
     demolishAt(cell);
     return;
@@ -282,8 +294,10 @@ scene.onCell = (cell, kind, x, y) => {
     void send({ type: "place", typeId: selectedType, board: cell.board, anchorR: cell.r, anchorC: cell.c, rotated });
     return;
   }
+  // 点击任意启用格：把这一格的地价卡片钉到左上角
   const found = live.cells.find(c => c.board === cell.board && c.r === cell.r && c.c === cell.c);
   selectedInstance = found?.instanceId ?? null;
+  pinnedCell = found?.enabled ? { board: cell.board, r: cell.r, c: cell.c } : null;
   paint();
 };
 
@@ -292,6 +306,7 @@ palette.onSelectType = id => {
   rotated = false;
   demolishMode = false;
   selectedInstance = null;
+  pinnedCell = null;
   scene.clearGhost();
   paint();
 };
@@ -300,6 +315,7 @@ palette.onToggleDemolish = () => {
   selectedType = null;
   rotated = false;
   selectedInstance = null;
+  pinnedCell = null;
   scene.clearGhost();
   paint();
 };
@@ -422,6 +438,7 @@ ui.onScrub = id => {
   rotated = false;
   demolishMode = false;
   selectedInstance = null;
+  pinnedCell = null;
   scene.clearGhost();
   paint();
 };
@@ -441,11 +458,12 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     const tag = (e.target as HTMLElement | null)?.tagName;
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-    if (selectedType || demolishMode || selectedInstance || formationsOpen) {
+    if (selectedType || demolishMode || selectedInstance || pinnedCell || formationsOpen) {
       selectedType = null;
       rotated = false;
       demolishMode = false;
       selectedInstance = null;
+      pinnedCell = null;
       formationsOpen = false;
       scene.clearGhost();
       paint();
