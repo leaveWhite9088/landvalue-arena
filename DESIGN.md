@@ -8,7 +8,7 @@
 
 - 一个 2.5D 俯瞰沙盘。柱高表达地价，配置不占主画面。
 - 一个本地权威进程。规则只在这里算，人手和 MCP 改的是同一份状态。
-- 五条 MCP 工具。页面不跑模型。步骤栏是这些工具调用的投影，不是另一套记录。
+- 七条 MCP 工具。页面不跑模型。步骤栏是这些工具调用的投影，不是另一套记录。
 
 不做：
 
@@ -131,11 +131,16 @@ MCP 只能放置和拆除，外加三条只读工具。适配若收到别的命�
 - 占地有任何一格越出这块棋盘、禁用或已占用，整步拒绝，不扣费。光环不溢出到别的棋盘。
 - 拆除不退钱。拆的是坐标所在的整座。
 - 不要自己算地价。用返回值里的数字。
+- 优化顺序以 `get_objectives` 为准。第 1 项最重要，不要假设总地价一定排第一。
 - 不能改配置。
+
+### get_objectives
+
+必须带 `roundId`。返回这一局的优化目标，按重要性从高到低。`objectives[]` 每项有 `rank`、`key`、`label`、`better`。`rank` 为 1 的那项最重要。`better` 为 `higher` 表示越大越好，`lower` 表示越小越好。比较时先比第 1 项，持平再比下一项。
 
 ### get_street_dictionary
 
-无参数。
+必须带 `roundId`。
 
 返回：
 
@@ -146,11 +151,11 @@ MCP 只能放置和拆除，外加三条只读工具。适配若收到别的命�
 
 ### list_buildings
 
-无参数。返回每个类型的 `id`、`name`、`w`、`h`、`cost`。不按花费过滤，预算没有上限。不返回颜色。
+必须带 `roundId`。返回每个类型的 `id`、`name`、`w`、`h`、`cost`。不按花费过滤，预算没有上限。不返回颜色。
 
 ### get_map
 
-无参数。返回地图摘要：
+必须带 `roundId`。返回这一局的地图摘要：
 
 - `rows`、`cols`
 - `disabled[]`：`{ r, c }`
@@ -162,7 +167,7 @@ MCP 只能放置和拆除，外加三条只读工具。适配若收到别的命�
 
 ### place_building
 
-参数：`buildingTypeId`、`board`、`row`、`col`、`reason`，可选 `rotated`。`reason` 必须是非空字符串。`board`、`row`、`col` 都从 1 计。
+参数：`roundId`、`buildingTypeId`、`board`、`row`、`col`、`reason`，可选 `rotated`。`reason` 必须是非空字符串。`board`、`row`、`col` 都从 1 计。对局结束后拒绝。
 
 成功：`ok: true`，加上完整地图摘要，以及 `placed`（新座的 id、类型、名称、锚点、占地、本次 `paid`）和 `delta`（总地价、最高地价、重复次数、累计花费相对放置前的变化）。
 
@@ -170,17 +175,24 @@ MCP 只能放置和拆除，外加三条只读工具。适配若收到别的命�
 
 ### demolish_building
 
-参数：`board`、`row`、`col`、`reason`。三个坐标都从 1 计。
+参数：`roundId`、`board`、`row`、`col`、`reason`。三个坐标都从 1 计。对局结束后拒绝。
 
 成功：`ok: true`，地图摘要，`removed`（座 id、类型、名称、占地），`delta`。`spent` 的增量必为 0。
 
 失败：`ok: false`。盘面与花费不变。
 
+### finish_round
+
+参数：`roundId`、`reason`。不改棋子，不退钱。成功后这一局不能再放置或拆除，并按对局名称存档，标记为模型交卷。人在页面上强制截止会另作标记。
+
 ### 错误码
 
 | 码 | 何时 |
 |---|---|
-| `missing_reason` | MCP 放置或拆除没带非空理由 |
+| `missing_reason` | MCP 放置、拆除或交卷没写够理由 |
+| `missing_round` | 调用没带 roundId |
+| `unknown_round` | 没有这一局 |
+| `round_closed` | 这一局已经结束 |
 | `unknown_board` | 棋盘编号不存在 |
 | `too_many_boards` | 已经有 4 块棋盘 |
 | `last_board` | 不能删掉最后一块棋盘 |
