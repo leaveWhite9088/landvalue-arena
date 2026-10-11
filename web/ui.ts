@@ -109,6 +109,7 @@ export class UI {
   }
 
   private renderTop(state: UiState) {
+    hideStatTip();
     clear(this.topbar);
     const brand = el("div", "brand");
     brand.append(el("span", "seal"));
@@ -118,10 +119,10 @@ export class UI {
     const stats = el("div", "stats");
     const s = state.view.stats;
     stats.append(
-      stat(fmtNum(s.score), "得分"),
-      stat(fmtNum(s.total), "总地价"),
-      stat(fmtNum(s.max), "最高"),
-      stat(String(s.repeat), "重复"),
+      stat(fmtNum(s.score), "得分", () => scoreTip(s)),
+      stat(fmtNum(s.total), "总地价", () => totalTip(state.view)),
+      stat(fmtNum(s.max), "最高", () => maxTip(state.view)),
+      stat(String(s.repeat), "重复", () => repeatTip(state.view)),
       stat(s.covered + "/" + s.cells, "占地"),
       stat(String(s.spent), "花费"),
     );
@@ -489,10 +490,85 @@ function clockStat(value: string, label: string) {
   return node;
 }
 
-function stat(value: string, label: string) {
-  const node = el("div", "stat");
+function stat(value: string, label: string, tip?: () => string[]) {
+  const node = el("div", "stat" + (tip ? " has-tip" : ""));
   node.append(el("b", "num", value), el("span", undefined, label));
+  if (tip) {
+    node.addEventListener("mouseenter", () => showStatTip(node, tip()));
+    node.addEventListener("mouseleave", hideStatTip);
+  }
   return node;
+}
+
+let statTip: HTMLElement | null = null;
+
+function showStatTip(anchor: HTMLElement, lines: string[]) {
+  if (!statTip) {
+    statTip = el("div", "stat-tip");
+    document.body.append(statTip);
+  }
+  clear(statTip);
+  for (const line of lines) statTip.append(el("p", undefined, line));
+  statTip.hidden = false;
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(360, window.innerWidth - 16);
+  statTip.style.maxWidth = width + "px";
+  statTip.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) + "px";
+  statTip.style.top = rect.bottom + 6 + "px";
+}
+
+function hideStatTip() {
+  if (statTip) statTip.hidden = true;
+}
+
+type ViewStats = ViewModel["stats"];
+type ViewCell = ViewModel["cells"][number];
+
+function scoreTip(s: ViewStats): string[] {
+  return [
+    "得分 = 总地价 + 最高地价×2 − 重复×100 − 花费",
+    "= " + fmtNum(s.total) + " + " + fmtNum(s.max) + "×2 − " + s.repeat + "×100 − " + s.spent,
+    "= " + fmtNum(s.total) + " + " + fmtNum(s.max * 2) + " − " + (s.repeat * 100) + " − " + s.spent,
+    "= " + fmtNum(s.score),
+  ];
+}
+
+function cellLabel(view: ViewModel, cell: ViewCell): string {
+  const inst = cell.instanceId ? view.instances.find(i => i.id === cell.instanceId) : undefined;
+  return "棋盘" + cell.board + " (" + cell.r + "," + cell.c + ")" + (inst ? " " + inst.name : "");
+}
+
+function totalTip(view: ViewModel): string[] {
+  const top = view.cells.filter(c => c.enabled).sort((a, b) => b.priceExact - a.priceExact).slice(0, 10);
+  if (!top.length) return ["没有启用格。"];
+  return ["地价最高的 " + top.length + " 格：",
+    ...top.map((c, i) => (i + 1) + ". " + cellLabel(view, c) + "　" + fmtNum(c.price))];
+}
+
+function maxTip(view: ViewModel): string[] {
+  const sorted = view.cells.filter(c => c.enabled).sort((a, b) => b.priceExact - a.priceExact);
+  const best = sorted[0];
+  if (!best) return ["没有启用格。"];
+  const ties = sorted.filter(c => c.priceExact === best.priceExact).length;
+  const lines = [cellLabel(view, best) + "，地价 " + fmtNum(best.price)
+    + (ties > 1 ? "（另有 " + (ties - 1) + " 格并列最高）" : "")];
+  const ledger = view.ledger.find(l => l.board === best.board && l.r === best.r && l.c === best.c)?.lines ?? [];
+  if (!ledger.length) lines.push("没有吃到任何加成。");
+  else for (const line of ledger) lines.push(line.label + "  +" + line.pct + "%");
+  return lines;
+}
+
+function repeatTip(view: ViewModel): string[] {
+  const counts = new Map<string, number>();
+  for (const inst of view.instances) counts.set(inst.typeId, (counts.get(inst.typeId) ?? 0) + 1);
+  const rows = [...counts.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]);
+  if (!rows.length) return ["没有重复建筑。每种类型都只有一座。"];
+  const lines = ["总重复 " + view.stats.repeat + "："];
+  for (const [id, n] of rows) {
+    const name = view.instances.find(i => i.typeId === id)?.name ?? id;
+    lines.push(name + " ×" + n + "，重复 " + (n - 1));
+  }
+  return lines;
 }
 
 function toolLabel(tool: string) {

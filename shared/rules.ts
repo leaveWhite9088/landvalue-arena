@@ -218,7 +218,7 @@ export function computePrices(state: State, formations = findFormations(state)):
   return { prices, ledger };
 }
 
-export function computeStats(state: State, prices: Record<string, number>): Stats {
+export function computeStats(state: State, prices: Record<string, number>, elapsedSec = 0): Stats {
   let total = 0;
   let max = 0;
   let cells = 0;
@@ -230,15 +230,16 @@ export function computeStats(state: State, prices: Record<string, number>): Stat
   const used = new Set(state.instances.map(i => i.typeId));
   const covered = state.instances.reduce((n, inst) => n + instanceCells(state, inst).length, 0);
   const repeat = state.instances.length - used.size;
+  const top = cells ? max : 0;
   return {
     total,
-    max: cells ? max : 0,
+    max: top,
     repeat,
     placed: state.instances.length,
     cells,
     covered,
     spent: state.spent,
-    score: total + (cells ? max : 0) * 2 - repeat * 100 - state.spent,
+    score: total + top * 2 - repeat * 100 - state.spent,
   };
 }
 
@@ -251,10 +252,10 @@ export function displayStats(stats: Stats): Stats {
   };
 }
 
-export function buildView(state: State): ViewModel {
+export function buildView(state: State, elapsedSec = 0): ViewModel {
   const formations = findFormations(state);
   const { prices, ledger } = computePrices(state, formations);
-  const stats = computeStats(state, prices);
+  const stats = computeStats(state, prices, elapsedSec);
   const occ = new Map<string, string>();
   for (const inst of state.instances) {
     for (const cell of instanceCells(state, inst)) occ.set(cellKey(cell.board, cell.r, cell.c), inst.id);
@@ -368,24 +369,13 @@ export function toMapSummary(view: ViewModel): MapSummary {
   };
 }
 
-export function duplicateLabel(state: State): string {
-  const counts = new Map<string, number>();
-  for (const inst of state.instances) counts.set(inst.typeId, (counts.get(inst.typeId) ?? 0) + 1);
-  const parts: string[] = [];
-  for (const [id, n] of counts) {
-    if (n < 2) continue;
-    parts.push((buildingOf(state, id)?.name ?? id) + "×" + n);
-  }
-  return parts.length ? "（" + parts.join("、") + "）" : "";
-}
-
-export function formatSnapshot(state: State): string {
-  const view = buildView(state);
+export function formatSnapshot(state: State, elapsedSec = 0): string {
+  const view = buildView(state, elapsedSec);
   const s = displayStats(view.stats);
   return "得分 " + fmtNum(s.score)
     + " · 总地价 " + fmtNum(s.total)
     + " · 最高地价 " + fmtNum(s.max)
-    + " · 重复建筑 " + s.repeat + duplicateLabel(state)
+    + " · 重复建筑 " + s.repeat
     + " · 花费 " + s.spent
     + " · 占地 " + s.covered + "/" + s.cells;
 }
