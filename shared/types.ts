@@ -236,8 +236,10 @@ export type RoundMeta = {
   endedBy: EndedBy | null;
   /** 之前几段进行期累计的毫秒；结束（暂停）期间不计 */
   accMs: number;
-  /** 当前这段进行期的开始时间 */
-  clockStart: number;
+  /** 当前这段进行期的开始时间；null 表示没在走字（模型还没首次调用，或人工暂停中） */
+  clockStart: number | null;
+  /** 人工暂停中 */
+  paused: boolean;
   calls: CallTally;
   /** 当前盘面成绩，排行榜用 */
   summary: { score: number; total: number; max: number; repeat: number; spent: number };
@@ -252,8 +254,10 @@ export type RoundRecord = {
   endedBy: EndedBy | null;
   /** 之前几段进行期累计的毫秒；结束（暂停）期间不计 */
   accMs: number;
-  /** 当前这段进行期的开始时间 */
-  clockStart: number;
+  /** 当前这段进行期的开始时间；null 表示没在走字（模型还没首次调用，或人工暂停中） */
+  clockStart: number | null;
+  /** 人工暂停中 */
+  paused: boolean;
   state: State;
   events: KanbanEvent[];
 };
@@ -327,7 +331,7 @@ export type UserCommand =
 
 export const MAP_NOTES = [
   "每次调用都要带 roundId。那是这一局的编号，由开局的人给你，不要猜，不要省略。",
-  "最终成绩是综合得分：score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从开局到现在经过的秒数。每秒扣 1 分，干 1 分钟就扣 60 分。越高越好。想好再动手，觉得够好就尽快交卷。",
+  "最终成绩是综合得分：score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从第一次调用工具到现在经过的秒数，暂停不计。每秒扣 1 分，干 1 分钟就扣 60 分。越高越好。想好再动手，觉得够好就尽快交卷。",
   "最多 4 块棋盘，每块行数和列数独立，以本次返回的 boards 为准。不要假设只有一块，也不要假设尺寸。",
   "占用、禁用、固有光环、专业街成街与光环都不跨棋盘。同一条街可以在不同棋盘上各自成街一次。",
   "总地价、最高地价、重复次数、累计花费、占地是全部棋盘合计。重复按类型在全部棋盘上的座数计算，不按棋盘分开。",
@@ -339,7 +343,7 @@ export const MAP_NOTES = [
 export const TOOLS: { name: ToolName; description: string }[] = [
   {
     name: "get_objectives",
-    description: "读取当前优化目标，按重要性从高到低排列。必须带 roundId，这一局的编号。第 1 项最重要。比较方案时按这个顺序做字典序比较：先比第 1 项，持平再比下一项。better 为 higher 表示越大越好，lower 表示越小越好。不要假设总地价一定排第一，顺序可以由人改，以本次返回为准。模型不能改这个顺序。最终成绩是综合得分 score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从开局到现在经过的秒数，每秒扣 1 分，越高越好，当前值在 get_map 的 stats.score 里。",
+    description: "读取当前优化目标，按重要性从高到低排列。必须带 roundId，这一局的编号。第 1 项最重要。比较方案时按这个顺序做字典序比较：先比第 1 项，持平再比下一项。better 为 higher 表示越大越好，lower 表示越小越好。不要假设总地价一定排第一，顺序可以由人改，以本次返回为准。模型不能改这个顺序。最终成绩是综合得分 score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从第一次调用工具到现在经过的秒数（暂停不计），每秒扣 1 分，越高越好，当前值在 get_map 的 stats.score 里。",
   },
   {
     name: "get_street_dictionary",

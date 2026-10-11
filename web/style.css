@@ -101,6 +101,10 @@ button { cursor: pointer; }
 
 .stat.has-tip { cursor: help; }
 
+.stat.clock-toggle { cursor: pointer; }
+
+.stat.clock-toggle.paused b { color: var(--muted); }
+
 /* 顶栏数值的悬浮明细 */
 .stat-tip {
   position: fixed;

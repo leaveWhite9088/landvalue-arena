@@ -49,7 +49,7 @@ function hello(ws: WebSocket) {
 }
 
 function elapsedOf(round: RoundRecord): number {
-  const running = round.endedAt == null ? Date.now() - round.clockStart : 0;
+  const running = round.endedAt == null && round.clockStart != null ? Date.now() - round.clockStart : 0;
   return Math.max(0, Math.floor((round.accMs + running) / 1000));
 }
 
@@ -64,6 +64,7 @@ function metaOf(round: RoundRecord): RoundMeta {
     endedBy: round.endedBy,
     accMs: round.accMs,
     clockStart: round.clockStart,
+    paused: round.paused,
     calls: tallyCalls(round.events),
     summary: { score: shown.score, total: shown.total, max: shown.max, repeat: shown.repeat, spent: shown.spent },
   };
@@ -220,6 +221,8 @@ async function runTool(name: string, args: Record<string, unknown>) {
   if (!roundId) return { ok: false, error: errorOf("missing_round") };
   const round = roundOf(roundId);
   if (!round) return { ok: false, error: errorOf("unknown_round") };
+  // 计时从第一次工具调用开始；暂停中调用不动时钟
+  if (round.endedAt == null && round.clockStart == null && !round.paused && round.accMs === 0) round.clockStart = Date.now();
   if (name === "finish_round") return finishRound(round, args);
   if (name === "place_building" || name === "demolish_building") {
     if (round.endedAt != null) {
@@ -367,7 +370,8 @@ async function closeRound(round: RoundRecord, endedBy: EndedBy) {
   if (round.endedAt == null) {
     round.endedAt = Date.now();
     round.endedBy = endedBy;
-    round.accMs += Math.max(0, round.endedAt - round.clockStart);
+    round.accMs += round.clockStart != null ? Math.max(0, round.endedAt - round.clockStart) : 0;
+    round.clockStart = null;
   }
   await persistRounds();
   broadcastRound(round);
@@ -397,7 +401,8 @@ async function startRound(version: string, model: string) {
     endedAt: null,
     endedBy: null,
     accMs: 0,
-    clockStart: now,
+    clockStart: null,
+    paused: false,
     state: structuredClone(state),
     events: [],
   };
@@ -429,10 +434,31 @@ async function resumeRound(roundId: string) {
   if (round.endedAt == null) return { ok: true as const, roundId: round.id };
   round.endedAt = null;
   round.endedBy = null;
-  round.clockStart = Date.now();
+  // 续玩：暂停过的保持暂停，还没开始过计时的保持 00:00:00 等首次调用，其余接着走
+  round.clockStart = round.paused || round.accMs === 0 ? null : Date.now();
   await persistRounds();
   broadcastRound(round);
   return { ok: true as const, roundId: round.id };
+}
+
+async function pauseRound(roundId: string) {
+  const round = roundOf(roundId);
+  if (!round) return { ok: false as const, error: errorOf("unknown_round") };
+  if (round.endedAt != null) return { ok: false as const, error: errorOf("round_closed", "这一局已经结束。") };
+  if (round.clockStart != null) {
+    round.accMs += Math.max(0, Date.now() - round.clockStart);
+    round.clockStart = null;
+    round.paused = true;
+  } else if (round.paused) {
+    round.clockStart = Date.now();
+    round.paused = false;
+  } else {
+    // 模型还没调用过，时钟本来就没走
+    return { ok: true as const, roundId: round.id, timing: "idle" as const };
+  }
+  await persistRounds();
+  broadcastRound(round);
+  return { ok: true as const, roundId: round.id, timing: round.paused ? "paused" as const : "running" as const };
 }
 
 async function renameRound(roundId: string, name: string) {
@@ -536,6 +562,11 @@ wss.on("connection", ws => {
         }
         if (action === "resume") {
           const result = await resumeRound(String(asked ?? ""));
+          send(ws, { type: "result", id: msg.id, ...result });
+          return;
+        }
+        if (action === "pause") {
+          const result = await pauseRound(String(asked ?? ""));
           send(ws, { type: "result", id: msg.id, ...result });
           return;
         }

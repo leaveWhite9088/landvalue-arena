@@ -73,7 +73,9 @@ export async function loadRounds(): Promise<RoundRecord[]> {
       endedBy: row.endedBy === "human" || row.endedBy === "model" ? row.endedBy : null,
       // 旧档没有分段计时：已结束的按整段时长补记，进行中的从头计
       accMs: typeof row.accMs === "number" ? row.accMs : endedAt != null ? endedAt - startedAt : 0,
-      clockStart: typeof row.clockStart === "number" ? row.clockStart : startedAt,
+      // 旧档没有 null 时钟和暂停：已结束的停表，进行中的从开局接着走
+      clockStart: row.clockStart === null || typeof row.clockStart === "number" ? row.clockStart : endedAt != null ? null : startedAt,
+      paused: row.paused === true,
       state: next,
       events: Array.isArray(row.events) ? row.events as KanbanEvent[] : [],
     });

@@ -30,6 +30,7 @@ export class UI {
   onEndRound: () => void = () => {};
   onResumeRound: (id: string) => void = () => {};
   onRenameRound: (id: string, name: string) => void = () => {};
+  onPauseRound: (id: string) => void = () => {};
   onWatchRound: (id: string | null) => void = () => {};
   onDeleteRound: (id: string) => void = () => {};
   onCopyRound: (id: string) => void = () => {};
@@ -140,7 +141,16 @@ export class UI {
     );
     if (watching) {
       const calls = tallyCalls(state.events);
-      stats.append(clockStat(fmtElapsed(watching), "用时"));
+      const clock = clockStat(fmtElapsed(watching), "用时");
+      if (!watching.endedAt) {
+        const idle = !watching.paused && watching.clockStart == null && watching.accMs === 0;
+        clock.classList.add("clock-toggle");
+        if (watching.paused) clock.classList.add("paused");
+        clock.title = idle ? "模型第一次调用工具后开始计时"
+          : watching.paused ? "已暂停，点击继续计时" : "点击暂停计时";
+        clock.addEventListener("click", () => this.onPauseRound(watching.id));
+      }
+      stats.append(clock);
       stats.append(stat(String(calls.total), "调用"));
     }
     const actions = el("div", "top-actions");
@@ -655,7 +665,7 @@ function toolLabel(tool: string) {
 }
 
 function elapsedSecOf(round: RoundMeta): number {
-  const running = round.endedAt == null ? Date.now() - round.clockStart : 0;
+  const running = round.endedAt == null && round.clockStart != null ? Date.now() - round.clockStart : 0;
   return Math.max(0, Math.floor((round.accMs + running) / 1000));
 }
 

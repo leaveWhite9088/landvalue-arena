@@ -9,7 +9,7 @@ export type ServerMsg =
   | { type: "saves"; saves: SaveMeta[] }
   | { type: "rounds"; rounds: RoundMeta[] }
   | { type: "round"; roundId: string; meta: RoundMeta; view: ViewModel; event?: KanbanEvent }
-  | { type: "result"; id: string; ok: boolean; error?: { code: string; message: string }; exportData?: unknown; roundId?: string; name?: string; view?: ViewModel; events?: KanbanEvent[]; endedBy?: "human" | "model" };
+  | { type: "result"; id: string; ok: boolean; error?: { code: string; message: string }; exportData?: unknown; roundId?: string; name?: string; view?: ViewModel; events?: KanbanEvent[]; endedBy?: "human" | "model"; timing?: "idle" | "running" | "paused" };
 
 export class Net {
   private ws: WebSocket | null = null;
@@ -48,7 +48,7 @@ export class Net {
     return this.request({ type: "command", command });
   }
 
-  round(action: "start" | "end" | "watch" | "delete" | "resume" | "rename", extra: { name?: string; version?: string; model?: string; roundId?: string } = {}) {
+  round(action: "start" | "end" | "watch" | "delete" | "resume" | "rename" | "pause", extra: { name?: string; version?: string; model?: string; roundId?: string } = {}) {
     return this.request({ type: "round", action, ...extra });
   }
 

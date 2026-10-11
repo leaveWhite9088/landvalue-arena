@@ -385,6 +385,15 @@ ui.onResumeRound = id => {
     paint();
   }).catch(() => ui.toast("没有连上沙盘服务。"));
 };
+ui.onPauseRound = id => {
+  void net.round("pause", { roundId: id }).then(result => {
+    if (!result.ok) ui.toast(result.error?.message ?? "没有切换。");
+    else if (result.timing === "paused") ui.toast("已暂停计时。");
+    else if (result.timing === "running") ui.toast("继续计时。");
+    else ui.toast("模型第一次调用工具后才开始计时。");
+    paint();
+  }).catch(() => ui.toast("没有连上沙盘服务。"));
+};
 ui.onRenameRound = (id, name) => {
   void net.round("rename", { roundId: id, name }).then(result => {
     if (!result.ok) ui.toast(result.error?.message ?? "没有改名。");
@@ -477,7 +486,7 @@ document.addEventListener("click", (e) => {
 window.setInterval(() => {
   const round = rounds.find(item => item.id === watchId);
   if (!round || round.endedAt) return;
-  const s = Math.floor(Math.max(0, round.accMs + Date.now() - round.clockStart) / 1000);
+  const s = Math.floor(Math.max(0, round.accMs + (round.clockStart != null ? Date.now() - round.clockStart : 0)) / 1000);
   const p = (n: number) => String(n).padStart(2, "0");
   ui.setClock(p(Math.floor(s / 3600)) + ":" + p(Math.floor((s % 3600) / 60)) + ":" + p(s % 60));
   // 得分每秒扣 1 分，跟时钟一起走
