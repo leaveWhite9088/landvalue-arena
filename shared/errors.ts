@@ -19,12 +19,14 @@ export function errorOf(code: string, message?: string, cells?: { board?: number
     bad_pct: "加成要是正数。",
     bad_name: "名称不能为空。",
     bad_size: "每块棋盘的行和列只能是 2 到 6。",
+    bad_time: "触发时间要是 1 到 86400 之间的整数秒。",
     bad_priorities: "优先级必须是四个目标的一个排列。",
     duplicate_save_name: "已经有这个名字的存档了。",
     invalid_import: "这不是一份有效的沙盘配置。",
     server_unavailable: "沙盘服务未启动。先在项目目录运行 npm run dev。",
     empty_name: "先写一个名称。",
     unknown_model: "先选一个模型。",
+    bad_password: "密码不对。",
   };
   return {
     code,

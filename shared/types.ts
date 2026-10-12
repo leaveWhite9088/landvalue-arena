@@ -78,6 +78,38 @@ export type SpendEntry = {
   at: number;
 };
 
+/** 蓝图事件的两年首批操作：禁用一格 / 启用一格 */
+export type BlueprintEventOp =
+  | { type: "disable_cell"; board: number; r: number; c: number }
+  | { type: "enable_cell"; board: number; r: number; c: number };
+
+export type BlueprintEvent = {
+  id: string;
+  /** 对局时钟走到第几秒触发（从第一次调用工具起走字，人工暂停不计） */
+  atSec: number;
+  op: BlueprintEventOp;
+};
+
+/** 广播视图里的事件：未解锁、未触发的不带坐标，防止从页面或 WS 流量里偷看编排 */
+export type EventView = {
+  id: string;
+  atSec: number;
+  kind: "disable_cell" | "enable_cell";
+  board: number | null;
+  r: number | null;
+  c: number | null;
+  fired?: boolean;
+};
+
+/** 输密码解锁后单独返回的完整编排 */
+export type ScheduleEntry = BlueprintEvent & { fired: boolean };
+
+export const MAX_EVENT_SEC = 86400;
+
+export function eventKindOf(op: BlueprintEventOp): "lose_cell" | "gain_cell" {
+  return op.type === "disable_cell" ? "lose_cell" : "gain_cell";
+}
+
 export type State = {
   version: 3;
   boards: Board[];
@@ -87,6 +119,8 @@ export type State = {
   spent: number;
   spendLog: SpendEntry[];
   priorities: Objective[];
+  /** 蓝图编排的定时地块变动，开局时随盘面一起复制进对局 */
+  events: BlueprintEvent[];
 };
 
 export type Stats = {
@@ -159,6 +193,8 @@ export type ViewModel = {
   streets: Street[];
   priorities: Objective[];
   spent: number;
+  /** 事件编排，坐标可能被打码（null），见 eventViewsOf */
+  events: EventView[];
 };
 
 export type MapInstance = {
@@ -258,6 +294,8 @@ export type RoundRecord = {
   clockStart: number | null;
   /** 人工暂停中 */
   paused: boolean;
+  /** 已触发过的蓝图事件 id */
+  firedEvents: string[];
   state: State;
   events: KanbanEvent[];
 };
@@ -274,7 +312,8 @@ export type ToolName =
 export type KanbanEvent = {
   id: string;
   at: number;
-  tool: ToolName;
+  /** "event" 不是模型工具：蓝图编排的地块变动触发时写的步骤 */
+  tool: ToolName | "event";
   ok: boolean;
   reason?: string;
   error?: AppError;
@@ -320,6 +359,8 @@ export type UserCommand =
   | { type: "addStreet"; name: string; types: [string, string, string]; pct: number }
   | { type: "updateStreet"; id: string; name?: string; types?: [string, string, string]; pct?: number }
   | { type: "deleteStreet"; id: string }
+  | { type: "addEvent"; atSec: number; op: BlueprintEventOp }
+  | { type: "deleteEvent"; id: string }
   | { type: "setPriorities"; priorities: Objective[] }
   | { type: "clearBoard" }
   | { type: "reset" }
@@ -343,7 +384,7 @@ export const MAP_NOTES = [
 export const TOOLS: { name: ToolName; description: string }[] = [
   {
     name: "get_objectives",
-    description: "读取当前优化目标，按重要性从高到低排列。必须带 roundId，这一局的编号。第 1 项最重要。比较方案时按这个顺序做字典序比较：先比第 1 项，持平再比下一项。better 为 higher 表示越大越好，lower 表示越小越好。不要假设总地价一定排第一，顺序可以由人改，以本次返回为准。模型不能改这个顺序。最终成绩是综合得分 score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从第一次调用工具到现在经过的秒数（暂停不计），每秒扣 1 分，越高越好，当前值在 get_map 的 stats.score 里。",
+    description: "读取当前优化目标，按重要性从高到低排列。必须带 roundId，这一局的编号。第 1 项最重要。比较方案时按这个顺序做字典序比较：先比第 1 项，持平再比下一项。better 为 higher 表示越大越好，lower 表示越小越好。不要假设总地价一定排第一，顺序可以由人改，以本次返回为准。模型不能改这个顺序。最终成绩是综合得分 score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从第一次调用工具到现在经过的秒数（暂停不计），每秒扣 1 分，越高越好，当前值在 get_map 的 stats.score 里。如果这一局编排了地块变动，会同时返回 events：每个变动只公开触发秒数（对局时钟）和种类（lose_cell 失去一格 / gain_cell 得到一格），位置在触发前保密，触发后（fired: true）公开。",
   },
   {
     name: "get_street_dictionary",

@@ -1,9 +1,9 @@
 import {
-  BASE_PRICE, DEFAULT_BOARDS, MAP_NOTES, MAX_BOARDS, MAX_EDGE, MIN_EDGE, OBJECTIVE_META, OBJECTIVES, PALETTE,
-  type AppError, type Board, type Building, type Cell, type CellView, type Coord, type FormationView,
+  BASE_PRICE, DEFAULT_BOARDS, MAP_NOTES, MAX_BOARDS, MAX_EDGE, MAX_EVENT_SEC, MIN_EDGE, OBJECTIVE_META, OBJECTIVES, PALETTE,
+  type AppError, type Board, type BlueprintEvent, type Building, type Cell, type CellView, type Coord, type EventView, type FormationView,
   type Instance, type InstanceView, type LedgerLine, type MapSummary, type Objective,
   type State, type Stats, type Street, type ViewModel,
-  cellKey, fmtNum, isShape, round1,
+  cellKey, eventKindOf, fmtNum, isShape, round1,
 } from "./types.ts";
 import { errorOf } from "./errors.ts";
 
@@ -252,7 +252,26 @@ export function displayStats(stats: Stats): Stats {
   };
 }
 
-export function buildView(state: State, elapsedSec = 0): ViewModel {
+export type EventViewOpts = { revealAll?: boolean; firedIds?: ReadonlySet<string> };
+
+/** 视图里的事件：默认打码坐标；revealAll（人解锁后的蓝图）或已触发的才公开 */
+export function eventViewsOf(events: BlueprintEvent[], opts?: EventViewOpts): EventView[] {
+  return events.map(e => {
+    const fired = opts?.firedIds?.has(e.id) ?? false;
+    const reveal = opts?.revealAll === true || fired;
+    return {
+      id: e.id,
+      atSec: e.atSec,
+      kind: e.op.type,
+      board: reveal ? e.op.board : null,
+      r: reveal ? e.op.r : null,
+      c: reveal ? e.op.c : null,
+      fired,
+    };
+  });
+}
+
+export function buildView(state: State, elapsedSec = 0, eventOpts?: EventViewOpts): ViewModel {
   const formations = findFormations(state);
   const { prices, ledger } = computePrices(state, formations);
   const stats = computeStats(state, prices, elapsedSec);
@@ -318,6 +337,7 @@ export function buildView(state: State, elapsedSec = 0): ViewModel {
     streets: state.streets,
     priorities: state.priorities,
     spent: state.spent,
+    events: eventViewsOf(state.events, eventOpts),
   };
 }
 
@@ -505,6 +525,7 @@ export function defaultState(): State {
     spent: 0,
     spendLog: [],
     priorities: ["total", "max", "repeat", "spend"],
+    events: [],
   };
 }
 
@@ -527,6 +548,7 @@ export function normalizeState(raw: unknown): State | null {
     spent?: number;
     spendLog?: unknown;
     priorities?: unknown;
+    events?: unknown;
   };
   if (!Array.isArray(s.buildings) || !Array.isArray(s.streets) || !Array.isArray(s.instances)) return null;
 
@@ -560,6 +582,31 @@ export function normalizeState(raw: unknown): State | null {
   const boards = readBoards(s);
   if (!boards) return null;
 
+  const events: BlueprintEvent[] = [];
+  if (s.events !== undefined) {
+    if (!Array.isArray(s.events)) return null;
+    for (const raw of s.events) {
+      if (!raw || typeof raw !== "object") return null;
+      const e = raw as { id?: unknown; atSec?: unknown; op?: { type?: unknown; board?: unknown; r?: unknown; c?: unknown } };
+      if (typeof e.id !== "string") return null;
+      if (!Number.isInteger(e.atSec) || (e.atSec as number) < 1 || (e.atSec as number) > MAX_EVENT_SEC) return null;
+      const op = e.op;
+      if (!op || (op.type !== "disable_cell" && op.type !== "enable_cell")) return null;
+      if (!Number.isInteger(op.board) || !Number.isInteger(op.r) || !Number.isInteger(op.c)) return null;
+      const target = boards[(op.board as number) - 1];
+      if (!target) return null;
+      // 失去地块必须在界内；得到地块可以指向界外（触发时棋盘长过去），但不能超过单边上限
+      const inBounds = (op.r as number) <= target.rows && (op.c as number) <= target.cols;
+      if (!inBounds && op.type === "disable_cell") return null;
+      if (op.type === "enable_cell" && ((op.r as number) > MAX_EDGE || (op.c as number) > MAX_EDGE)) return null;
+      events.push({
+        id: e.id,
+        atSec: e.atSec as number,
+        op: { type: op.type, board: op.board as number, r: op.r as number, c: op.c as number },
+      });
+    }
+  }
+
   const state: State = {
     version: 3,
     boards,
@@ -569,6 +616,7 @@ export function normalizeState(raw: unknown): State | null {
     spent: 0,
     spendLog: [],
     priorities: ["total", "max", "repeat", "spend"],
+    events,
   };
 
   const occupied = new Set<string>();
@@ -686,7 +734,14 @@ export function previewPlacement(view: ViewModel, typeId: string, board: number,
   return { ok: true, cells };
 }
 
-export function objectivesOf(state: State) {
+export const EVENTS_NOTE = "这一局编排了地块变动，按对局时钟计时（从第一次调用工具起走字，人工暂停不计）。到点自动触发。触发前只公开触发秒数 atSec 和种类 kind，位置保密：lose_cell 是失去某一格（格子被禁用，若上面有建筑，建筑一并销毁且不退钱）；gain_cell 是得到某一格（界内的禁用格变为可用；若指向棋盘界外，棋盘会扩大到能容纳它，扩出来的其余格子保持禁用，单边最长 6）。已触发（fired: true）的变动会公开位置，盘面以 get_map 为准。布局时要为未知位置的变动留有余地，不要把价值全部押在少数几格上。";
+
+export function objectivesOf(state: State, firedIds?: ReadonlySet<string>) {
+  const events = state.events.map(e => {
+    const fired = firedIds?.has(e.id) ?? false;
+    const base = { atSec: e.atSec, kind: eventKindOf(e.op), fired };
+    return fired ? { ...base, board: e.op.board, r: e.op.r, c: e.op.c } : base;
+  });
   return {
     rule: "先比 rank 为 1 的那一项，持平再比下一项。higher 越大越好，lower 越小越好。不要假设总地价一定排第一。",
     objectives: state.priorities.map((key, index) => ({
@@ -695,6 +750,7 @@ export function objectivesOf(state: State) {
       label: OBJECTIVE_META[key].label,
       better: OBJECTIVE_META[key].better,
     })),
+    ...(events.length ? { events, eventsNote: EVENTS_NOTE } : {}),
   };
 }
 

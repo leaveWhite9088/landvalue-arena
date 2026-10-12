@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { apply } from "./apply.ts";
+import { apply, applyBlueprintEvent } from "./apply.ts";
 import {
   auraCells, buildView, compareSchemes, computePrices, computeStats,
-  defaultState, findFormations, footprint, formatSnapshot, instanceCells, normalizeState,
+  defaultState, findFormations, footprint, formatSnapshot, instanceCells, normalizeState, objectivesOf,
 } from "./rules.ts";
 import { cellKey, round1, type State } from "./types.ts";
 
@@ -23,6 +23,7 @@ function bare(): State {
     spent: 0,
     spendLog: [],
     priorities: ["total", "max", "repeat", "spend"],
+    events: [],
   };
 }
 
@@ -310,4 +311,116 @@ test("旧的单棋盘存档能迁成一块棋盘", () => {
   const next = normalizeState(legacy);
   assert.equal(next?.boards.length, 1);
   assert.equal(next?.instances[0].board, 1);
+  assert.deepEqual(next?.events, []);
+});
+
+test("蓝图事件：禁用空格只加禁用格，启用还原", () => {
+  const s = bare();
+  const off = applyBlueprintEvent(s, { type: "disable_cell", board: 1, r: 2, c: 2 });
+  assert.equal(off.changed, true);
+  assert.equal(off.destroyed, null);
+  assert.equal(off.state.boards[0].holes.length, 1);
+  assert.equal(price(off.state, 1, 2, 2), undefined);
+  const on = applyBlueprintEvent(off.state, { type: "enable_cell", board: 1, r: 2, c: 2 });
+  assert.equal(on.changed, true);
+  assert.equal(on.state.boards[0].holes.length, 0);
+  assert.equal(price(on.state, 1, 2, 2), 100);
+});
+
+test("蓝图事件：禁用有建筑的格子，建筑一并销毁且不退钱", () => {
+  let s = bare();
+  s = put(s, "D", 2, 2, "d1"); // 2×2 占 (2,2)(2,3)(3,2)(3,3)
+  const hit = applyBlueprintEvent(s, { type: "disable_cell", board: 1, r: 3, c: 3 });
+  assert.equal(hit.destroyed?.id, "d1");
+  assert.equal(hit.state.instances.length, 0);
+  assert.equal(hit.state.spent, 30);
+  assert.equal(hit.state.spendLog.length, 1);
+  assert.equal(price(hit.state, 1, 3, 3), undefined);
+  assert.equal(price(hit.state, 1, 2, 2), 100);
+});
+
+test("蓝图事件：越界或重复禁用则落空，盘面不变", () => {
+  let s = bare();
+  const oob = applyBlueprintEvent(s, { type: "disable_cell", board: 1, r: 9, c: 1 });
+  assert.equal(oob.changed, false);
+  const off = applyBlueprintEvent(s, { type: "disable_cell", board: 1, r: 1, c: 1 });
+  s = off.state;
+  const again = applyBlueprintEvent(s, { type: "disable_cell", board: 1, r: 1, c: 1 });
+  assert.equal(again.changed, false);
+  assert.equal(again.state.boards[0].holes.length, 1);
+});
+
+test("得到地块可以指向界外：棋盘长过去，其余新格禁用", () => {
+  const s = bare(); // 4×4
+  const gain = applyBlueprintEvent(s, { type: "enable_cell", board: 1, r: 5, c: 2 });
+  assert.equal(gain.changed, true);
+  assert.equal(gain.grew, true);
+  assert.equal(gain.state.boards[0].rows, 5);
+  assert.equal(gain.state.boards[0].cols, 4);
+  assert.equal(price(gain.state, 1, 5, 2), 100);
+  assert.equal(price(gain.state, 1, 5, 1), undefined);
+  assert.equal(price(gain.state, 1, 5, 4), undefined);
+  assert.deepEqual(gain.state.boards[0].holes, [{ r: 5, c: 1 }, { r: 5, c: 3 }, { r: 5, c: 4 }]);
+  // 已有的占用不受影响：界内放置仍然合法
+  const placed = apply(gain.state, { type: "place", typeId: "A", board: 1, anchorR: 5, anchorC: 2, source: "user" });
+  assert.equal(placed.ok, true);
+  // 扩过头上限则落空
+  const tooFar = applyBlueprintEvent(s, { type: "enable_cell", board: 1, r: 7, c: 1 });
+  assert.equal(tooFar.changed, false);
+});
+
+test("蓝图事件编排：校验时间和落点，导入导出能带上", () => {
+  const s = bare();
+  const badTime = apply(s, { type: "addEvent", atSec: 0, op: { type: "disable_cell", board: 1, r: 1, c: 1 } });
+  assert.equal(badTime.ok, false);
+  if (!badTime.ok) assert.equal(badTime.error.code, "bad_time");
+  const badCell = apply(s, { type: "addEvent", atSec: 60, op: { type: "enable_cell", board: 1, r: 9, c: 1 } });
+  assert.equal(badCell.ok, false);
+  const growOk = apply(s, { type: "addEvent", atSec: 60, op: { type: "enable_cell", board: 1, r: 5, c: 2 } });
+  assert.equal(growOk.ok, true);
+  const ok = apply(s, { type: "addEvent", atSec: 600, op: { type: "disable_cell", board: 1, r: 2, c: 3 } });
+  assert.equal(ok.ok, true);
+  if (!ok.ok) return;
+  assert.equal(ok.state.events.length, 1);
+  const round = normalizeState(JSON.parse(JSON.stringify(ok.state)));
+  assert.equal(round?.events.length, 1);
+  assert.equal(round?.events[0].atSec, 600);
+  const del = apply(ok.state, { type: "deleteEvent", id: ok.state.events[0].id });
+  assert.equal(del.ok, true);
+  if (del.ok) assert.equal(del.state.events.length, 0);
+});
+
+test("对模型的披露：触发前只有时间和种类，触发后公开位置", () => {
+  let s = bare();
+  const ok = apply(s, { type: "addEvent", atSec: 600, op: { type: "disable_cell", board: 1, r: 2, c: 3 } });
+  assert.equal(ok.ok, true);
+  if (!ok.ok) return;
+  const id = ok.state.events[0].id;
+  const before = objectivesOf(ok.state, new Set());
+  assert.equal(before.events?.length, 1);
+  assert.equal(before.events?.[0].kind, "lose_cell");
+  assert.equal(before.events?.[0].atSec, 600);
+  assert.equal("r" in (before.events?.[0] ?? {}), false);
+  const after = objectivesOf(ok.state, new Set([id]));
+  assert.equal(after.events?.[0].fired, true);
+  assert.equal((after.events?.[0] as { r?: number }).r, 2);
+  const none = objectivesOf(bare());
+  assert.equal(none.events, undefined);
+});
+
+test("广播视图默认打码事件坐标，触发或显式解锁才公开", () => {
+  const s0 = bare();
+  const ok = apply(s0, { type: "addEvent", atSec: 600, op: { type: "disable_cell", board: 1, r: 2, c: 3 } });
+  assert.equal(ok.ok, true);
+  if (!ok.ok) return;
+  const id = ok.state.events[0].id;
+  const masked = buildView(ok.state);
+  assert.equal(masked.events[0].r, null);
+  assert.equal(masked.events[0].board, null);
+  assert.equal(masked.events[0].kind, "disable_cell");
+  const fired = buildView(ok.state, 0, { firedIds: new Set([id]) });
+  assert.equal(fired.events[0].r, 2);
+  assert.equal(fired.events[0].fired, true);
+  const revealed = buildView(ok.state, 0, { revealAll: true });
+  assert.equal(revealed.events[0].c, 3);
 });

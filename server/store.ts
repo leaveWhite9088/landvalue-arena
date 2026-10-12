@@ -76,6 +76,7 @@ export async function loadRounds(): Promise<RoundRecord[]> {
       // 旧档没有 null 时钟和暂停：已结束的停表，进行中的从开局接着走
       clockStart: row.clockStart === null || typeof row.clockStart === "number" ? row.clockStart : endedAt != null ? null : startedAt,
       paused: row.paused === true,
+      firedEvents: Array.isArray(row.firedEvents) ? row.firedEvents.filter((id): id is string => typeof id === "string") : [],
       state: next,
       events: Array.isArray(row.events) ? row.events as KanbanEvent[] : [],
     });

@@ -1,5 +1,5 @@
-import type { AppError, Board, Building, State, UserCommand } from "./types.ts";
-import { isShape, MAX_BOARDS } from "./types.ts";
+import type { AppError, BlueprintEventOp, Board, Building, Instance, State, UserCommand } from "./types.ts";
+import { isShape, MAX_BOARDS, MAX_EDGE, MAX_EVENT_SEC } from "./types.ts";
 import { errorOf } from "./errors.ts";
 import {
   boardOf, buildingOf, defaultState, emptyBoards, footprint, instanceCells, instanceShape, isEnabled, isPermutation,
@@ -57,6 +57,11 @@ export function apply(state: State, command: UserCommand & { reason?: string; so
       return updateStreet(state, command);
     case "deleteStreet":
       return deleteStreet(state, command.id);
+    case "addEvent":
+      return addEvent(state, command);
+    case "deleteEvent":
+      if (!state.events.some(e => e.id === command.id)) return fail("not_found", "没有这个事件。");
+      return { ok: true, state: { ...state, events: state.events.filter(e => e.id !== command.id) } };
     case "setPriorities":
       if (!isPermutation(command.priorities)) return fail("bad_priorities");
       return { ok: true, state: { ...state, priorities: command.priorities } };
@@ -284,6 +289,68 @@ function deleteStreet(state: State, id: string): ApplyResult {
 
 function streetTypesOk(state: State, types: string[]): boolean {
   return types.length === 3 && types.every(t => state.buildings.some(b => b.id === t));
+}
+
+function addEvent(state: State, command: { atSec: number; op: BlueprintEventOp }): ApplyResult {
+  if (!Number.isInteger(command.atSec) || command.atSec < 1 || command.atSec > MAX_EVENT_SEC) return fail("bad_time");
+  const op = command.op;
+  if (!op || (op.type !== "disable_cell" && op.type !== "enable_cell")) return fail("bad_event", "只支持失去一格或得到一格。");
+  const board = boardOf(state, op.board);
+  if (!board) return fail("unknown_board");
+  if (!Number.isInteger(op.r) || !Number.isInteger(op.c) || op.r < 1 || op.c < 1) {
+    return fail("out_of_bounds", "这一格在这块棋盘上不存在。");
+  }
+  // 失去地块只能指向现在存在的格子；得到地块可以指向界外，触发时棋盘长过去
+  if (op.type === "disable_cell" && (op.r > board.rows || op.c > board.cols)) {
+    return fail("out_of_bounds", "这一格在这块棋盘上不存在。");
+  }
+  if (op.type === "enable_cell" && (op.r > MAX_EDGE || op.c > MAX_EDGE)) {
+    return fail("out_of_bounds", "得到地块最多把棋盘扩到 " + MAX_EDGE + "×" + MAX_EDGE + "。");
+  }
+  const event = { id: nid("e"), atSec: command.atSec, op: { type: op.type, board: op.board, r: op.r, c: op.c } };
+  return { ok: true, state: { ...state, events: [...state.events, event] } };
+}
+
+/**
+ * 对局时钟到点后触发一次蓝图事件。
+ * 失去地块：禁用该格；上面有建筑时一并销毁且不退钱（花费不回溯）。
+ * 得到地块：界内的禁用格启用；指向界外时棋盘扩大到能容纳它，扩出来的其余格子一律禁用。
+ * 目标棋盘不存在、格子已在目标状态、或扩盘会超过单边上限，则落空，盘面不变。
+ */
+export function applyBlueprintEvent(state: State, op: BlueprintEventOp): { state: State; destroyed: Instance | null; changed: boolean; grew?: boolean } {
+  const board = boardOf(state, op.board);
+  if (!board) return { state, destroyed: null, changed: false };
+  if (!Number.isInteger(op.r) || !Number.isInteger(op.c) || op.r < 1 || op.c < 1) {
+    return { state, destroyed: null, changed: false };
+  }
+  if (op.type === "enable_cell") {
+    if (op.r > MAX_EDGE || op.c > MAX_EDGE) return { state, destroyed: null, changed: false };
+    if (op.r <= board.rows && op.c <= board.cols) {
+      const had = board.holes.some(h => h.r === op.r && h.c === op.c);
+      if (!had) return { state, destroyed: null, changed: false };
+      const boards = state.boards.map((b, i) => i + 1 === op.board ? { ...b, holes: b.holes.filter(h => !(h.r === op.r && h.c === op.c)) } : b);
+      return { state: { ...state, boards }, destroyed: null, changed: true };
+    }
+    // 指向界外：棋盘长过去，新区域里只有目标格可用，其余全部禁用
+    const rows = Math.max(board.rows, op.r);
+    const cols = Math.max(board.cols, op.c);
+    const holes = [...board.holes];
+    for (let r = 1; r <= rows; r++) {
+      for (let c = 1; c <= cols; c++) {
+        const outside = r > board.rows || c > board.cols;
+        if (outside && !(r === op.r && c === op.c)) holes.push({ r, c });
+      }
+    }
+    const boards = state.boards.map((b, i) => i + 1 === op.board ? { rows, cols, holes } : b);
+    return { state: { ...state, boards }, destroyed: null, changed: true, grew: true };
+  }
+  if (op.r > board.rows || op.c > board.cols) return { state, destroyed: null, changed: false };
+  const destroyed = occupantAt(state, op.board, op.r, op.c) ?? null;
+  const already = board.holes.some(h => h.r === op.r && h.c === op.c);
+  if (already && !destroyed) return { state, destroyed: null, changed: false };
+  const boards = state.boards.map((b, i) => i + 1 === op.board && !already ? { ...b, holes: [...b.holes, { r: op.r, c: op.c }] } : b);
+  const instances = destroyed ? state.instances.filter(i => i.id !== destroyed.id) : state.instances;
+  return { state: { ...state, boards, instances }, destroyed, changed: true };
 }
 
 export function placementBlocked(state: State, board: number, r: number, c: number): AppError | null {

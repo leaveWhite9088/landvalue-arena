@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { apply } from "../shared/apply.ts";
+import { apply, applyBlueprintEvent } from "../shared/apply.ts";
 import { errorOf } from "../shared/errors.ts";
 import {
   buildView, buildingListOf, buildingOf, dictionaryOf,
@@ -14,6 +14,8 @@ import { modelOf, tallyCalls } from "../shared/types.ts";
 import { loadEvents, loadRounds, loadSaves, loadState, saveEvents, saveMeta, saveRounds, saveSaves, saveState } from "./store.ts";
 
 const PORT = 26101;
+/** 查看事件编排坐标的密码。可用环境变量 LANDVALUE_EVENTS_PASSWORD 覆盖。 */
+const EVENTS_PASSWORD = process.env.LANDVALUE_EVENTS_PASSWORD || "1234";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
 
@@ -53,8 +55,13 @@ function elapsedOf(round: RoundRecord): number {
   return Math.max(0, Math.floor((round.accMs + running) / 1000));
 }
 
+/** 对局视图：未触发的事件坐标打码，触发后才公开 */
+function roundView(round: RoundRecord): ViewModel {
+  return buildView(round.state, elapsedOf(round), { firedIds: new Set(round.firedEvents) });
+}
+
 function metaOf(round: RoundRecord): RoundMeta {
-  const shown = displayStats(buildView(round.state, elapsedOf(round)).stats);
+  const shown = displayStats(roundView(round).stats);
   return {
     id: round.id,
     name: round.name,
@@ -80,7 +87,7 @@ function broadcastRound(round: RoundRecord, event?: KanbanEvent) {
     type: "round",
     roundId: round.id,
     meta: metaOf(round),
-    view: buildView(round.state, elapsedOf(round)),
+    view: roundView(round),
     event,
   });
 }
@@ -245,12 +252,12 @@ async function runTool(name: string, args: Record<string, unknown>) {
   }
   const statsLine = formatSnapshot(round.state, elapsedOf(round));
   const payload = name === "get_objectives"
-    ? objectivesOf(round.state)
+    ? objectivesOf(round.state, new Set(round.firedEvents))
     : name === "get_street_dictionary"
       ? dictionaryOf(round.state)
       : name === "list_buildings"
         ? buildingListOf(round.state)
-        : toMapSummary(buildView(round.state, elapsedOf(round)));
+        : toMapSummary(roundView(round));
   const headline = name === "get_objectives" ? "查看了优化目标"
     : name === "get_street_dictionary" ? "查看了词典"
       : name === "list_buildings" ? "查看了可放置建筑"
@@ -285,7 +292,7 @@ async function mutate(round: RoundRecord, kind: "place" | "demolish", args: Reco
   const board = Number(args.board);
   const row = Number(args.row);
   const col = Number(args.col);
-  const beforeView = buildView(round.state, elapsedOf(round));
+  const beforeView = roundView(round);
   const before = beforeView.stats;
   const typeId = String(args.buildingTypeId ?? "");
   const named = kind === "place" ? buildingOf(round.state, typeId)?.name : undefined;
@@ -301,7 +308,7 @@ async function mutate(round: RoundRecord, kind: "place" | "demolish", args: Reco
     return { ok: false, error: applied.error };
   }
   round.state = applied.state;
-  const view = buildView(round.state, elapsedOf(round));
+  const view = roundView(round);
   const after = view.stats;
   const inst = kind === "place"
     ? view.instances.find(i => i.id === applied.placedId)
@@ -356,14 +363,14 @@ async function finishRound(round: RoundRecord, args: Record<string, unknown>) {
     });
     return { ok: false, error };
   }
-  const view = buildView(round.state, elapsedOf(round));
+  const view = roundView(round);
   await pushRoundEvent(round, {
     id: nid("e"), at: Date.now(), tool: "finish_round", ok: true, reason,
     headline: "模型交卷", detail: "终局已冻结", statsLine: formatSnapshot(round.state, elapsedOf(round)),
     canScrub: true, snapshot: view,
   });
   await closeRound(round, "model");
-  return tagRound(round, { ok: true, endedBy: "model", ...toMapSummary(buildView(round.state, elapsedOf(round))) });
+  return tagRound(round, { ok: true, endedBy: "model", ...toMapSummary(roundView(round)) });
 }
 
 async function closeRound(round: RoundRecord, endedBy: EndedBy) {
@@ -376,6 +383,45 @@ async function closeRound(round: RoundRecord, endedBy: EndedBy) {
   await persistRounds();
   broadcastRound(round);
 }
+
+// 蓝图事件：对局时钟（从首次工具调用起走字，人工暂停不计）走到 atSec 就触发。
+// 触发前模型只能从 get_objectives 看到时间和种类，位置保密；触发后写进步骤轨并广播。
+async function fireDueEvents() {
+  for (const round of rounds) {
+    if (round.endedAt != null) continue;
+    const due = round.state.events
+      .filter(e => !round.firedEvents.includes(e.id) && e.atSec <= elapsedOf(round))
+      .sort((a, b) => a.atSec - b.atSec);
+    for (const ev of due) {
+      round.firedEvents.push(ev.id);
+      const result = applyBlueprintEvent(round.state, ev.op);
+      round.state = result.state;
+      const where = "棋盘 " + ev.op.board + " 第 " + ev.op.r + " 行第 " + ev.op.c + " 列";
+      const lose = ev.op.type === "disable_cell";
+      let detail = result.changed ? where + (lose ? " 已禁用" : " 已可用") : where + " 已不存在，变动落空";
+      if (result.grew) {
+        const grown = round.state.boards[ev.op.board - 1];
+        if (grown) detail = where + " 已可用，棋盘扩到 " + grown.rows + "×" + grown.cols + "，其余新格禁用";
+      }
+      if (result.destroyed) {
+        detail += "，" + (buildingOf(result.state, result.destroyed.typeId)?.name ?? "建筑") + " 一并销毁，不退钱";
+      }
+      await pushRoundEvent(round, {
+        id: nid("e"),
+        at: Date.now(),
+        tool: "event",
+        ok: true,
+        headline: lose ? "失去地块" : "得到地块",
+        detail,
+        statsLine: formatSnapshot(round.state, elapsedOf(round)),
+        canScrub: true,
+        snapshot: roundView(round),
+      });
+    }
+  }
+}
+
+setInterval(() => { void enqueue(fireDueEvents); }, 1000);
 
 function dayStamp(at: number): string {
   const d = new Date(at);
@@ -403,13 +449,14 @@ async function startRound(version: string, model: string) {
     accMs: 0,
     clockStart: null,
     paused: false,
+    firedEvents: [],
     state: structuredClone(state),
     events: [],
   };
   rounds.push(round);
   await persistRounds();
   broadcastRound(round);
-  return { ok: true as const, roundId: round.id, name: round.name, view: buildView(round.state, elapsedOf(round)), events: round.events };
+  return { ok: true as const, roundId: round.id, name: round.name, view: roundView(round), events: round.events };
 }
 
 async function deleteRound(roundId: string) {
@@ -453,8 +500,8 @@ async function pauseRound(roundId: string) {
     round.clockStart = Date.now();
     round.paused = false;
   } else {
-    // 模型还没调用过，时钟本来就没走
-    return { ok: true as const, roundId: round.id, timing: "idle" as const };
+    // 模型还没调用过：允许人手动开始计时（用于演练和测试事件）
+    round.clockStart = Date.now();
   }
   await persistRounds();
   broadcastRound(round);
@@ -581,6 +628,23 @@ wss.on("connection", ws => {
           send(ws, { type: "result", id: msg.id, ...result });
           return;
         }
+        if (action === "events") {
+          // 查看完整编排要密码。不带 roundId 时返回出题盘的编排。结果只发给请求的客户端，不广播。
+          const pass = String((msg as { password?: string }).password ?? "");
+          if (pass !== EVENTS_PASSWORD) {
+            send(ws, { type: "result", id: msg.id, ok: false, error: errorOf("bad_password") });
+            return;
+          }
+          const round = asked ? roundOf(String(asked)) : undefined;
+          if (asked && !round) {
+            send(ws, { type: "result", id: msg.id, ok: false, error: errorOf("unknown_round") });
+            return;
+          }
+          const source = round ? round.state.events : state.events;
+          const fired = new Set(round?.firedEvents ?? []);
+          send(ws, { type: "result", id: msg.id, ok: true, schedule: source.map(e => ({ ...e, fired: fired.has(e.id) })) });
+          return;
+        }
         if (action === "watch") {
           const round = roundOf(String(asked ?? ""));
           if (!round) {
@@ -592,7 +656,7 @@ wss.on("connection", ws => {
             id: msg.id,
             ok: true,
             roundId: round.id,
-            view: buildView(round.state, elapsedOf(round)),
+            view: roundView(round),
             events: round.events,
           });
           return;
