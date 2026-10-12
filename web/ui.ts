@@ -1,5 +1,5 @@
 import { clear, el } from "./dom.ts";
-import type { Coord, KanbanEvent, RoundMeta, ViewModel } from "../shared/types.ts";
+import type { Coord, KanbanEvent, RoundMeta, ScheduleEntry, ViewModel } from "../shared/types.ts";
 import { fmtNum, modelOf, MODELS, shapeLabel, tallyCalls } from "../shared/types.ts";
 
 export type UiState = {
@@ -36,6 +36,9 @@ export class UI {
   onWatchRound: (id: string | null) => void = () => {};
   onDeleteRound: (id: string) => void = () => {};
   onCopyRound: (id: string) => void = () => {};
+  onShowEvents: () => void = () => {};
+  /** 输密码向服务器换完整编排（只回给本客户端，不落盘不广播） */
+  eventsUnlock: (password: string) => Promise<ScheduleEntry[] | null> = async () => null;
   private menuOpen = false;
   private confirmDelete = "";
 
@@ -45,6 +48,37 @@ export class UI {
   private hover = document.querySelector("#hover") as HTMLElement;
   private scrub = document.querySelector("#scrub") as HTMLElement;
   private popover = document.querySelector("#popover") as HTMLElement;
+  private eventsPop = document.querySelector("#events-pop") as HTMLElement;
+  private eventsOpen = false;
+  private schedule: ScheduleEntry[] | null = null;
+
+  // —— 步骤轨：骨架常驻，消息按 id reconcile，不全量重建 ——
+  private railTab: HTMLButtonElement;
+  private railList: HTMLElement;
+  private railItems = new Map<string, { node: HTMLElement; sig: string }>();
+  private railEmpty: HTMLElement | null = null;
+  private railPinned = true;
+
+  constructor() {
+    this.railTab = el("button", "rail-tab") as HTMLButtonElement;
+    this.railTab.type = "button";
+    this.railTab.addEventListener("click", () => this.onToggleRail());
+    const body = el("div", "rail-body");
+    const head = el("div", "rail-head");
+    head.append(el("h2", undefined, "步骤"));
+    const collapse = el("button", "text-btn", "收起");
+    collapse.type = "button";
+    collapse.addEventListener("click", () => this.onToggleRail());
+    head.append(collapse);
+    this.railList = el("div", "rail-list");
+    // 用户滚离底部就取消贴底，回到底部恢复贴底
+    this.railList.addEventListener("scroll", () => {
+      const l = this.railList;
+      this.railPinned = l.scrollHeight - l.scrollTop - l.clientHeight < 24;
+    });
+    body.append(head, this.railList);
+    this.rail.append(this.railTab, body);
+  }
   private rank = document.querySelector("#rank") as HTMLDialogElement;
   private toastEl = document.querySelector("#toast") as HTMLElement;
   private boot = document.querySelector("#boot") as HTMLElement;
@@ -61,6 +95,8 @@ export class UI {
     if (state.watchId !== this.confirmWatch) {
       this.confirmEnd = false;
       this.confirmWatch = state.watchId;
+      this.eventsOpen = false;
+      this.schedule = null;
     }
     this.lastTop = state;
     this.workspace.classList.toggle("rail-collapsed", state.railCollapsed);
@@ -68,6 +104,7 @@ export class UI {
     this.renderRail(state);
     this.renderScrub(state);
     this.renderPopover(state);
+    this.renderEventsPop(state);
     this.renderRank(state);
     if (state.pinnedCell) this.renderPinned(state);
     else if (this.hover.classList.contains("pinned")) {
@@ -111,8 +148,9 @@ export class UI {
   }
 
   scrollRail() {
-    const list = this.rail.querySelector(".rail-list");
-    if (list) list.scrollTop = list.scrollHeight;
+    this.railPinned = true;
+    const l = this.railList;
+    requestAnimationFrame(() => { l.scrollTop = l.scrollHeight; });
   }
 
   private renderTop(state: UiState) {
@@ -150,7 +188,7 @@ export class UI {
         const idle = !watching.paused && watching.clockStart == null && watching.accMs === 0;
         clock.classList.add("clock-toggle");
         if (watching.paused) clock.classList.add("paused");
-        clock.title = idle ? "模型第一次调用工具后开始计时"
+        clock.title = idle ? "还没开始计时，点击手动开始（不等模型）"
           : watching.paused ? "已暂停，点击继续计时" : "点击暂停计时";
         clock.addEventListener("click", () => this.onPauseRound(watching.id));
       }
@@ -178,6 +216,14 @@ export class UI {
     const streets = el("button", "ghost", "街区 " + state.view.formations.length);
     streets.type = "button";
     streets.addEventListener("click", () => this.onToggleFormations());
+    const evBtn = watching && state.view.events.length
+      ? el("button", "ghost", "事件 " + state.view.events.length)
+      : null;
+    if (evBtn) {
+      evBtn.type = "button";
+      evBtn.title = "查看这一局的地块变动编排，需要密码";
+      evBtn.addEventListener("click", () => this.onShowEvents());
+    }
     const config = el("button", "ghost", "配置");
     config.type = "button";
     config.addEventListener("click", () => this.onOpenConfig());
@@ -207,7 +253,7 @@ export class UI {
       this.confirmEnd = false;
       this.onEndRound();
     });
-    actions.append(menu, build, streets, config, rank, start);
+    actions.append(menu, build, streets, ...(evBtn ? [evBtn] : []), config, rank, start);
     this.topbar.append(brand, stats, actions);
   }
 
@@ -262,54 +308,68 @@ export class UI {
   }
 
   private renderRail(state: UiState) {
-    // 重渲染会重建列表，先记住滚动位置；贴底时保持贴底，否则留在原处
-    const oldList = this.rail.querySelector(".rail-list");
-    const oldTop = oldList ? oldList.scrollTop : null;
-    const wasAtBottom = oldList
-      ? oldList.scrollHeight - oldList.scrollTop - oldList.clientHeight < 24
-      : true;
-    clear(this.rail);
-    const watching = state.rounds.find(round => round.id === state.watchId);
-    const who = modelOf(watching?.model);
-    const tab = el("button", "rail-tab", "步骤" + (countSteps(state.events) ? " " + countSteps(state.events) : ""));
-    tab.type = "button";
-    tab.addEventListener("click", () => this.onToggleRail());
-    // 收起时只渲染拉手，一条消息都不进 DOM，从结构上杜绝消息漏到棋盘上
-    if (state.railCollapsed) {
-      this.rail.append(tab);
+    const steps = countSteps(state.events);
+    this.railTab.textContent = "步骤" + (steps ? " " + steps : "");
+    this.reconcileRail(state);
+  }
+
+  /** 增量对齐 DOM 与事件列表：删消失的、换签名变了的、按序插入，最后按需贴底 */
+  private reconcileRail(state: UiState) {
+    const list = this.railList;
+    const who = modelOf(state.rounds.find(round => round.id === state.watchId)?.model);
+
+    // 空态占位
+    if (!state.events.length) {
+      for (const [id, item] of this.railItems) { item.node.remove(); this.railItems.delete(id); }
+      const text = !state.watchId
+        ? "这是出题盘。开始一局之后，模型的每次调用会发到那一局的步骤里。"
+        : "这一局还没有调用。把编号给" + (who?.name ?? "模型") + "，它带上 roundId 之后，每次调用会发到这里。";
+      if (!this.railEmpty) {
+        this.railEmpty = el("p", "rail-empty", text);
+        list.append(this.railEmpty);
+      } else if (this.railEmpty.textContent !== text) {
+        this.railEmpty.textContent = text;
+      }
       return;
     }
-    const body = el("div", "rail-body");
-    const head = el("div", "rail-head");
-    head.append(el("h2", undefined, "步骤"));
-    const collapse = el("button", "text-btn", "收起");
-    collapse.type = "button";
-    collapse.addEventListener("click", () => this.onToggleRail());
-    head.append(collapse);
-    const list = el("div", "rail-list");
-    if (!state.watchId) list.append(el("p", "rail-empty", "这是出题盘。开始一局之后，模型的每次调用会发到那一局的步骤里。"));
-    else if (!state.events.length) {
-      const name = who?.name ?? "模型";
-      list.append(el("p", "rail-empty", "这一局还没有调用。把编号给" + name + "，它带上 roundId 之后，每次调用会发到这里。"));
+    if (this.railEmpty) { this.railEmpty.remove(); this.railEmpty = null; }
+
+    // 先删掉已经不存在的（清日志、切对局）
+    const alive = new Set(state.events.map(e => e.id));
+    for (const [id, item] of this.railItems) {
+      if (!alive.has(id)) { item.node.remove(); this.railItems.delete(id); }
     }
-    let stepNo = 0;
+
+    // 按顺序对齐；内容签名变了就重建这一条
+    let prev: Node | null = null;
     for (const event of state.events) {
-      if (event.canScrub) stepNo++;
-      list.append(this.chatMessage(state, event, who, stepNo));
+      const sig = [event.ok, event.canScrub, event.headline, event.reason ?? "", event.detail ?? "",
+        event.statsLine ?? "", event.accent ?? "", event.payload ? 1 : 0, event.at].join("");
+      let item = this.railItems.get(event.id);
+      if (item && item.sig !== sig) {
+        item.node.remove();
+        item = undefined;
+      }
+      if (!item) {
+        const node = event.tool === "event"
+          ? this.sysMessage(event)
+          : this.chatMessage(event, who);
+        item = { node, sig };
+        this.railItems.set(event.id, item);
+      }
+      item.node.classList.toggle("active", state.scrubId === event.id);
+      const ref: Node | null = prev ? prev.nextSibling : list.firstChild;
+      if (item.node !== ref) list.insertBefore(item.node, ref);
+      prev = item.node;
     }
-    body.append(head, list);
-    this.rail.append(tab, body);
-    if (oldTop != null) {
-      if (wasAtBottom) list.scrollTop = list.scrollHeight;
-      else list.scrollTop = oldTop;
-    } else {
-      // 刚展开或首次渲染：直接贴底，看最新消息
-      list.scrollTop = list.scrollHeight;
+
+    if (this.railPinned) {
+      requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
     }
   }
 
-  private chatMessage(state: UiState, event: KanbanEvent, who: ReturnType<typeof modelOf>, stepNo: number) {
-    const msg = el("article", "msg" + (event.ok ? "" : " fail") + (state.scrubId === event.id ? " active" : ""));
+  private chatMessage(event: KanbanEvent, who: ReturnType<typeof modelOf>) {
+    const msg = el("article", "msg" + (event.ok ? "" : " fail") + (event.canScrub ? " stepped" : ""));
     const avatar = document.createElement("img");
     avatar.className = "msg-avatar";
     avatar.alt = "";
@@ -317,12 +377,13 @@ export class UI {
     else avatar.hidden = true;
     const main = el("div", "msg-main");
     const name = el("div", "msg-name");
+    name.append(el("span", "step-badge"));
     name.append(el("b", undefined, who?.name ?? "这一局"));
     name.append(el("time", undefined, clockOf(event.at)));
     const bubble = el("button", "msg-bubble" + (event.canScrub ? " scrubbable" : ""));
     bubble.type = "button";
     if (event.accent) bubble.style.borderLeftColor = event.accent;
-    bubble.append(el("strong", undefined, event.canScrub ? stepNo + "  " + event.headline : event.headline));
+    bubble.append(el("strong", undefined, event.headline));
     if (event.reason) bubble.append(el("p", "reason", event.reason));
     if (event.detail) bubble.append(el("p", "detail", event.detail));
     if (event.payload) {
@@ -341,6 +402,31 @@ export class UI {
       main.append(snap);
     }
     msg.append(avatar, main);
+    return msg;
+  }
+
+  /** 蓝图事件触发的系统消息：横幅卡，不走模型的聊天气泡 */
+  private sysMessage(event: KanbanEvent) {
+    const msg = el("article", "sys-msg" + (event.canScrub ? " stepped scrubbable" : ""));
+    const head = el("div", "sys-msg-head");
+    const tag = el("span", "sys-msg-tag");
+    tag.append(el("span", "step-badge"));
+    tag.append(document.createTextNode("◆ 沙盘变动"));
+    head.append(tag);
+    head.append(el("time", undefined, clockOf(event.at)));
+    const body = el("button", "sys-msg-body");
+    body.type = "button";
+    body.append(el("strong", undefined, event.headline));
+    if (event.detail) body.append(el("p", "detail", event.detail));
+    if (event.canScrub) {
+      body.addEventListener("click", () => this.onScrub(event.id));
+    }
+    msg.append(head, body);
+    if (event.statsLine) {
+      const snap = el("div", "msg-snap");
+      snap.append(el("span", undefined, event.statsLine));
+      msg.append(snap);
+    }
     return msg;
   }
 
@@ -515,6 +601,73 @@ export class UI {
     }
   }
 
+  /** 右上角「事件 n」：小浮层开关 */
+  toggleEventsPop() {
+    this.eventsOpen = !this.eventsOpen;
+    if (this.lastTop) this.render(this.lastTop);
+  }
+
+  private renderEventsPop(state: UiState) {
+    if (!this.eventsOpen || !state.watchId) {
+      this.eventsPop.hidden = true;
+      return;
+    }
+    // 输入中途不要被广播重渲染打断
+    const ae = document.activeElement;
+    if (ae && this.eventsPop.contains(ae) && ae.tagName === "INPUT" && !this.eventsPop.hidden) return;
+    this.eventsPop.hidden = false;
+    clear(this.eventsPop);
+    const head = el("div", "events-pop-head");
+    head.append(el("b", undefined, "事件编排"));
+    const close = el("button", "text-btn", "收起");
+    close.type = "button";
+    close.addEventListener("click", () => this.toggleEventsPop());
+    head.append(close);
+    this.eventsPop.append(head);
+    if (!this.schedule) {
+      this.eventsPop.append(el("p", "hint", "输密码才显示坐标，防模型偷看。"));
+      const input = el("input") as HTMLInputElement;
+      input.type = "password";
+      input.placeholder = "密码";
+      const go = el("button", "btn", "解锁");
+      go.type = "button";
+      const deny = () => {
+        input.value = "";
+        input.placeholder = "密码不对";
+        input.classList.add("bad");
+        setTimeout(() => input.classList.remove("bad"), 1200);
+      };
+      const submit = () => {
+        void this.eventsUnlock(input.value).then(list => {
+          if (!list) { deny(); return; }
+          this.schedule = list;
+          if (this.lastTop) {
+            const top = this.lastTop;
+            this.eventsOpen = true;
+            this.renderEventsPop(top);
+          }
+        });
+      };
+      go.addEventListener("click", submit);
+      input.addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+      const row = el("div", "row");
+      row.append(input, go);
+      this.eventsPop.append(row);
+      return;
+    }
+    const list = [...this.schedule].sort((a, b) => a.atSec - b.atSec);
+    if (!list.length) {
+      this.eventsPop.append(el("p", "hint", "这一局没有编排事件。"));
+      return;
+    }
+    for (const ev of list) {
+      const item = el("div", "events-pop-item" + (ev.fired ? " fired" : ""));
+      item.append(el("b", undefined, clockText(ev.atSec) + "  " + (ev.op.type === "disable_cell" ? "失去地块" : "得到地块")));
+      item.append(el("span", undefined, "棋盘 " + ev.op.board + "  第 " + ev.op.r + " 行第 " + ev.op.c + " 列" + (ev.fired ? " · 已触发" : "")));
+      this.eventsPop.append(item);
+    }
+  }
+
   private renderPinned(state: UiState) {
     const cell = state.pinnedCell;
     if (!cell) return;
@@ -672,6 +825,7 @@ function toolLabel(tool: string) {
   if (tool === "place_building") return "放置";
   if (tool === "demolish_building") return "拆除";
   if (tool === "finish_round") return "交卷";
+  if (tool === "event") return "变动";
   return tool;
 }
 
@@ -685,6 +839,14 @@ function fmtElapsed(round: RoundMeta) {
   const s = elapsedSecOf(round);
   const p = (n: number) => String(n).padStart(2, "0");
   return p(Math.floor(s / 3600)) + ":" + p(Math.floor((s % 3600) / 60)) + ":" + p(s % 60);
+}
+
+function clockText(total: number) {
+  const p = (n: number) => String(n).padStart(2, "0");
+  const h = Math.floor(total / 3600);
+  return h > 0
+    ? h + ":" + p(Math.floor((total % 3600) / 60)) + ":" + p(total % 60)
+    : Math.floor(total / 60) + ":" + p(total % 60);
 }
 
 function countSteps(events: KanbanEvent[]) {

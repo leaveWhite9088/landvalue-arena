@@ -399,6 +399,63 @@ button { cursor: pointer; }
 .msg.active .msg-bubble { box-shadow: 0 0 0 1px var(--accent); }
 .msg-bubble.scrubbable:hover { background: #fff; }
 
+/* 步骤编号用 CSS 计数器：插入、删除、重排后自动更新，不用 JS 维护 */
+.rail-list { counter-reset: step; }
+.rail-list .stepped { counter-increment: step; }
+.step-badge { display: none; }
+.rail-list .stepped .step-badge { display: inline-block; }
+.step-badge::before {
+  content: counter(step);
+  display: inline-block;
+  min-width: 16px;
+  font-size: 11px;
+  color: #b5b5b5;
+  font-variant-numeric: tabular-nums;
+}
+.sys-msg-tag .step-badge::before { color: #c2ab7d; margin-right: 2px; }
+
+/* 沙盘变动（蓝图事件触发）：全宽横幅，淡金底虚线框，与模型的聊天气泡区分 */
+.sys-msg {
+  margin: 0 0 16px;
+  border: 1px dashed #d8c49a;
+  border-radius: 8px;
+  background: #faf5e8;
+  padding: 8px 12px 10px;
+  font-size: 12.5px;
+}
+
+.sys-msg-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 0 4px;
+}
+
+.sys-msg-tag {
+  font-size: 11px;
+  color: #a07c2c;
+  letter-spacing: 0.05em;
+}
+
+.sys-msg-head time { font-size: 11px; color: #b3a275; font-variant-numeric: tabular-nums; }
+
+.sys-msg-body {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+}
+
+.sys-msg-body strong { display: block; font-weight: 600; font-size: 13px; }
+.sys-msg-body .detail { margin: 3px 0 0; font-size: 12px; color: #7a6a45; font-variant-numeric: tabular-nums; }
+.sys-msg.scrubbable .sys-msg-body { cursor: pointer; }
+.sys-msg.active { border-color: var(--accent); border-style: solid; }
+.sys-msg .msg-snap { margin: 8px 0 0; }
+
 .model-pick {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -943,6 +1000,47 @@ input[type="number"] { width: 72px; }
   padding: 8px 0;
   z-index: 4;
 }
+
+/* 右上角事件编排浮层 */
+.events-pop {
+  position: absolute;
+  top: calc(var(--top) + 6px);
+  right: 18px;
+  width: 280px;
+  max-height: 360px;
+  overflow: auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  z-index: 5;
+  box-shadow: 0 6px 24px rgba(38, 41, 45, 0.08);
+}
+
+.events-pop-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 0 6px;
+}
+
+.events-pop-head b { font-size: 13px; }
+
+.events-pop .row { display: flex; gap: 8px; margin-top: 6px; }
+.events-pop .row input { flex: 1; min-width: 0; }
+.events-pop input.bad { border-color: #c44b4b; }
+
+.events-pop-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+}
+
+.events-pop-item b { font-weight: 600; }
+.events-pop-item span { color: #888; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.events-pop-item.fired b { color: #a07c2c; }
 
 .form-line {
   display: block;

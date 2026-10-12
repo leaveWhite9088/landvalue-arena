@@ -223,7 +223,8 @@ net.onRound = msg => {
   if (!rounds.some(round => round.id === msg.roundId)) rounds = rounds.concat(msg.meta);
   if (watchId === msg.roundId) {
     watchView = msg.view;
-    if (msg.event) watchEvents = watchEvents.concat(msg.event);
+    // 广播和 watch 拉取可能撞车，按 id 去重，防止同一步出现两次
+    if (msg.event && !watchEvents.some(e => e.id === msg.event!.id)) watchEvents = watchEvents.concat(msg.event);
     paint();
     if (!railCollapsed) ui.scrollRail();
   } else paint();
@@ -334,6 +335,19 @@ ui.onDemolish = () => {
 };
 ui.onOpenConfig = () => modal.open();
 ui.onOpenBuild = () => palette.open();
+// 解锁事件编排坐标：对局面板带 roundId，配置弹窗不带（查出题盘）
+async function unlockEvents(password: string, roundId?: string) {
+  try {
+    const res = await net.round("events", { password, ...(roundId ? { roundId } : {}) });
+    return res.ok ? res.schedule ?? [] : null;
+  } catch {
+    ui.toast("没有连上沙盘服务。");
+    return null;
+  }
+}
+modal.onUnlock = password => unlockEvents(password);
+ui.eventsUnlock = password => watchId ? unlockEvents(password, watchId) : Promise.resolve(null);
+ui.onShowEvents = () => ui.toggleEventsPop();
 const roundDialog = document.querySelector("#round-name") as HTMLDialogElement;
 const roundCancel = roundDialog.querySelector("button[value='cancel']") as HTMLButtonElement;
 roundCancel.addEventListener("click", () => roundDialog.close("cancel"));
