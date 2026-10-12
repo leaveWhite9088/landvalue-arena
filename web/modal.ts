@@ -1,11 +1,14 @@
 import { clear, el } from "./dom.ts";
-import { fmtNum, MAX_BOARDS, MAX_EDGE, MIN_EDGE, OBJECTIVE_META, shapeLabel, type Objective, type SaveMeta, type UserCommand, type ViewModel } from "../shared/types.ts";
+import { fmtNum, MAX_BOARDS, MAX_EDGE, MIN_EDGE, OBJECTIVE_META, shapeLabel, type Objective, type SaveMeta, type ScheduleEntry, type UserCommand, type ViewModel } from "../shared/types.ts";
 
 export class Modal {
   private tab = "board";
   private confirming: "clear" | "reset" | "resetBoard" | null = null;
   private view: ViewModel | null = null;
   private saves: SaveMeta[] = [];
+  private unlocked: ScheduleEntry[] | null = null;
+  /** 输密码向服务器换完整编排（只在内存里，不落盘不广播） */
+  onUnlock: (password: string) => Promise<ScheduleEntry[] | null> = async () => null;
 
   constructor(
     private dialog: HTMLDialogElement,
@@ -22,6 +25,11 @@ export class Modal {
   sync(view: ViewModel, saves: SaveMeta[]) {
     this.view = view;
     this.saves = saves;
+    // 解锁拿到的坐标只挂内存：编排变了就扔掉对不上的条目
+    if (this.unlocked) {
+      const ids = new Set(view.events.map(e => e.id));
+      this.unlocked = this.unlocked.filter(e => ids.has(e.id));
+    }
     if (!this.dialog.open) return;
     const ae = document.activeElement;
     if (ae && this.dialog.contains(ae) && (ae.tagName === "INPUT" || ae.tagName === "SELECT")) return;
@@ -41,7 +49,7 @@ export class Modal {
       close.addEventListener("click", () => this.dialog.close());
       head.append(close);
       const tabs = el("div", "tabs");
-      for (const [id, label] of [["board", "棋盘"], ["priority", "优先级"], ["saves", "蓝图"]] as const) {
+      for (const [id, label] of [["board", "棋盘"], ["priority", "优先级"], ["event", "事件"], ["saves", "蓝图"]] as const) {
         const btn = el("button", "tab" + (this.tab === id ? " active" : ""), label);
         btn.type = "button";
         btn.addEventListener("click", () => { this.tab = id; this.paint(true); });
@@ -52,7 +60,7 @@ export class Modal {
       this.dialog.append(head, tabs, panel);
     } else {
       this.dialog.querySelectorAll(".tab").forEach((node, i) => {
-        const ids = ["board", "priority", "saves"];
+        const ids = ["board", "priority", "event", "saves"];
         node.classList.toggle("active", ids[i] === this.tab);
       });
     }
@@ -60,6 +68,7 @@ export class Modal {
     clear(panel);
     if (this.tab === "board") this.paintBoard(panel, view);
     else if (this.tab === "priority") this.paintPriority(panel, view);
+    else if (this.tab === "event") this.paintEvent(panel, view);
     else this.paintSaves(panel);
   }
 
@@ -153,6 +162,73 @@ export class Modal {
       row.append(sel);
       panel.append(row);
     });
+  }
+
+  private paintEvent(panel: HTMLElement, view: ViewModel) {
+    panel.append(el("p", "hint", "按对局时钟到点触发，位置对模型保密到触发为止。失去地块会连建筑一起销毁；得到地块可以点在界外，棋盘会扩过去（单边最长 6）。"));
+    const sorted = [...view.events].sort((a, b) => a.atSec - b.atSec);
+    if (!sorted.length) panel.append(el("p", "hint", "还没有编排事件。"));
+    for (const ev of sorted) {
+      const item = el("div", "save-item");
+      const grow = el("div", "grow");
+      grow.append(el("div", undefined, clockOfSec(ev.atSec) + "  " + (ev.kind === "disable_cell" ? "失去地块" : "得到地块")));
+      const full = this.unlocked?.find(u => u.id === ev.id);
+      grow.append(el("small", undefined, full
+        ? "棋盘 " + full.op.board + "  第 " + full.op.r + " 行第 " + full.op.c + " 列"
+        : "坐标保密，输密码可见"));
+      const del = el("button", "text-btn danger", "删除");
+      del.type = "button";
+      del.addEventListener("click", () => this.send({ type: "deleteEvent", id: ev.id }));
+      item.append(grow, del);
+      panel.append(item);
+    }
+    if (sorted.length && !this.unlocked) {
+      const pass = el("input") as HTMLInputElement;
+      pass.type = "password";
+      pass.placeholder = "密码";
+      const unlockBtn = el("button", "ghost", "解锁坐标");
+      unlockBtn.type = "button";
+      const submit = () => {
+        void this.onUnlock(pass.value).then(list => {
+          if (!list) { this.toast("密码不对。"); return; }
+          this.unlocked = list;
+          this.paint(false);
+        });
+      };
+      unlockBtn.addEventListener("click", submit);
+      pass.addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+      const unlockRow = el("div", "row");
+      unlockRow.append(pass, unlockBtn);
+      panel.append(unlockRow);
+    }
+    const min = numInput("10");
+    min.placeholder = "分";
+    const sec = numInput("0");
+    sec.placeholder = "秒";
+    const kind = el("select") as HTMLSelectElement;
+    kind.append(new Option("失去地块", "disable_cell"));
+    kind.append(new Option("得到地块", "enable_cell"));
+    const board = el("select") as HTMLSelectElement;
+    for (const b of view.boards) board.append(new Option("棋盘 " + b.board + "（" + b.rows + "×" + b.cols + "）", String(b.board)));
+    const row = numInput("1");
+    row.placeholder = "行";
+    const col = numInput("1");
+    col.placeholder = "列";
+    const add = el("button", "btn", "添加事件");
+    add.type = "button";
+    add.addEventListener("click", () => {
+      const atSec = (Number(min.value) || 0) * 60 + (Number(sec.value) || 0);
+      this.send({
+        type: "addEvent",
+        atSec,
+        op: { type: kind.value as "disable_cell" | "enable_cell", board: Number(board.value), r: Number(row.value), c: Number(col.value) },
+      });
+    });
+    const timeRow = el("div", "row");
+    timeRow.append(field("分", min), field("秒", sec), field("种类", kind));
+    const posRow = el("div", "row");
+    posRow.append(field("棋盘", board), field("行", row), field("列", col), add);
+    panel.append(timeRow, posRow);
   }
 
   private paintSaves(panel: HTMLElement) {
@@ -258,4 +334,12 @@ export function buildingSelect(view: ViewModel, selected?: string) {
 function stamp(d: Date) {
   const p = (n: number) => String(n).padStart(2, "0");
   return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+function clockOfSec(total: number) {
+  const p = (n: number) => String(n).padStart(2, "0");
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0 ? h + ":" + p(m) + ":" + p(s) : m + ":" + p(s);
 }

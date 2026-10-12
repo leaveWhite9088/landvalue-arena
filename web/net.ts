@@ -1,4 +1,4 @@
-import type { KanbanEvent, RoundMeta, SaveMeta, UserCommand, ViewModel } from "../shared/types.ts";
+import type { KanbanEvent, RoundMeta, SaveMeta, ScheduleEntry, UserCommand, ViewModel } from "../shared/types.ts";
 
 export type Hello = { type: "hello"; view: ViewModel; events: KanbanEvent[]; saves: SaveMeta[]; rounds?: RoundMeta[] };
 export type ServerMsg =
@@ -9,7 +9,7 @@ export type ServerMsg =
   | { type: "saves"; saves: SaveMeta[] }
   | { type: "rounds"; rounds: RoundMeta[] }
   | { type: "round"; roundId: string; meta: RoundMeta; view: ViewModel; event?: KanbanEvent }
-  | { type: "result"; id: string; ok: boolean; error?: { code: string; message: string }; exportData?: unknown; roundId?: string; name?: string; view?: ViewModel; events?: KanbanEvent[]; endedBy?: "human" | "model"; timing?: "idle" | "running" | "paused" };
+  | { type: "result"; id: string; ok: boolean; error?: { code: string; message: string }; exportData?: unknown; roundId?: string; name?: string; view?: ViewModel; events?: KanbanEvent[]; schedule?: ScheduleEntry[]; endedBy?: "human" | "model"; timing?: "idle" | "running" | "paused" };
 
 export class Net {
   private ws: WebSocket | null = null;
@@ -48,7 +48,7 @@ export class Net {
     return this.request({ type: "command", command });
   }
 
-  round(action: "start" | "end" | "watch" | "delete" | "resume" | "rename" | "pause", extra: { name?: string; version?: string; model?: string; roundId?: string } = {}) {
+  round(action: "start" | "end" | "watch" | "delete" | "resume" | "rename" | "pause" | "events", extra: { name?: string; version?: string; model?: string; roundId?: string; password?: string } = {}) {
     return this.request({ type: "round", action, ...extra });
   }
 
