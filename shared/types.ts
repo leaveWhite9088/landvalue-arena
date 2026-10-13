@@ -104,6 +104,13 @@ export type EventView = {
 /** 输密码解锁后单独返回的完整编排 */
 export type ScheduleEntry = BlueprintEvent & { fired: boolean };
 
+/** 对模型披露的事件：只有时间、种类、是否已触发，位置永远不公布，落点自己从地图上找 */
+export type DisclosedEvent = {
+  atSec: number;
+  kind: "lose_cell" | "gain_cell";
+  fired: boolean;
+};
+
 export const MAX_EVENT_SEC = 86400;
 
 export function eventKindOf(op: BlueprintEventOp): "lose_cell" | "gain_cell" {
@@ -131,6 +138,8 @@ export type Stats = {
   cells: number;
   covered: number;
   spent: number;
+  /** 对局时钟当前秒数：从第一次调用工具起走字，人工暂停不计，结束停表 */
+  elapsedSec: number;
   /** 综合得分 = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 用时秒数 */
   score: number;
 };
@@ -234,6 +243,8 @@ export type MapSummary = {
     placed: number;
     cells: number;
     covered: number;
+    /** 对局时钟当前秒数 */
+    elapsedSec: number;
     score: number;
   };
 };
@@ -384,7 +395,7 @@ export const MAP_NOTES = [
 export const TOOLS: { name: ToolName; description: string }[] = [
   {
     name: "get_objectives",
-    description: "读取当前优化目标，按重要性从高到低排列。必须带 roundId，这一局的编号。第 1 项最重要。比较方案时按这个顺序做字典序比较：先比第 1 项，持平再比下一项。better 为 higher 表示越大越好，lower 表示越小越好。不要假设总地价一定排第一，顺序可以由人改，以本次返回为准。模型不能改这个顺序。最终成绩是综合得分 score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从第一次调用工具到现在经过的秒数（暂停不计），每秒扣 1 分，越高越好，当前值在 get_map 的 stats.score 里。如果这一局编排了地块变动，会同时返回 events：每个变动只公开触发秒数（对局时钟）和种类（lose_cell 失去一格 / gain_cell 得到一格），位置在触发前保密，触发后（fired: true）公开。",
+    description: "读取当前优化目标，按重要性从高到低排列。必须带 roundId，这一局的编号。第 1 项最重要。比较方案时按这个顺序做字典序比较：先比第 1 项，持平再比下一项。better 为 higher 表示越大越好，lower 表示越小越好。不要假设总地价一定排第一，顺序可以由人改，以本次返回为准。模型不能改这个顺序。最终成绩是综合得分 score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从第一次调用工具到现在经过的秒数（暂停不计），每秒扣 1 分，越高越好，当前值在 get_map 的 stats.score 里，stats.elapsedSec 是对局时钟当前秒数。如果这一局编排了地块变动，会同时返回 events：每个变动只有触发秒数 atSec（对局时钟）和种类 kind（lose_cell 失去一格 / gain_cell 得到一格），fired 表示是否已触发。位置永远不公布：过了触发秒数，自己重新看地图，从禁用格、棋盘尺寸和场上建筑的变化里找出落点。",
   },
   {
     name: "get_street_dictionary",
@@ -396,7 +407,7 @@ export const TOOLS: { name: ToolName; description: string }[] = [
   },
   {
     name: "get_map",
-    description: "读取这一局的全部棋盘。必须带 roundId。坐标是三元组 (board, row, col)，都从 1 计。最多 4 块，编号是 boards 的顺序，尺寸各自独立，以返回值为准。占用、光环、成街都不跨棋盘。返回每块的尺寸、禁用格、建筑，以及每个启用格的地价 price 和 bonuses。bonuses 是这一格吃到的每一笔增益：kind 为 innate 是某座建筑的固有光环，street 是某一条已生效的专业街；name 是来源，pct 是加成百分比，at 是固有光环那座建筑的棋盘和锚点。没有 bonuses 的启用格地价是 100。地价已由服务端算好，不要自行复利。同时返回这一局合计的总地价、最高地价、重复次数、累计花费、占地，以及综合得分 score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从开局到现在经过的秒数。score 是最终成绩，越高越好，每秒扣 1 分。哪个指标最重要调用 get_objectives。不能用这个工具改配置。",
+    description: "读取这一局的全部棋盘。必须带 roundId。坐标是三元组 (board, row, col)，都从 1 计。最多 4 块，编号是 boards 的顺序，尺寸各自独立，以返回值为准。占用、光环、成街都不跨棋盘。返回每块的尺寸、禁用格、建筑，以及每个启用格的地价 price 和 bonuses。bonuses 是这一格吃到的每一笔增益：kind 为 innate 是某座建筑的固有光环，street 是某一条已生效的专业街；name 是来源，pct 是加成百分比，at 是固有光环那座建筑的棋盘和锚点。没有 bonuses 的启用格地价是 100。地价已由服务端算好，不要自行复利。同时返回这一局合计的总地价、最高地价、重复次数、累计花费、占地、对局时钟秒数 stats.elapsedSec，以及综合得分 score = 总地价 + 最高地价×2 − 重复次数×100 − 累计花费 − 从开局到现在经过的秒数。score 是最终成绩，越高越好，每秒扣 1 分。如果这一局编排了地块变动（用 get_objectives 查触发秒数和种类），过了触发秒数务必重新调用本工具，从 boards 的尺寸、disabled 和 instances 的变化里自己找出变动落点。哪个指标最重要调用 get_objectives。不能用这个工具改配置。",
   },
   {
     name: "place_building",

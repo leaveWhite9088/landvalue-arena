@@ -1,6 +1,6 @@
 import {
   BASE_PRICE, DEFAULT_BOARDS, MAP_NOTES, MAX_BOARDS, MAX_EDGE, MAX_EVENT_SEC, MIN_EDGE, OBJECTIVE_META, OBJECTIVES, PALETTE,
-  type AppError, type Board, type BlueprintEvent, type Building, type Cell, type CellView, type Coord, type EventView, type FormationView,
+  type AppError, type Board, type BlueprintEvent, type Building, type Cell, type CellView, type Coord, type DisclosedEvent, type EventView, type FormationView,
   type Instance, type InstanceView, type LedgerLine, type MapSummary, type Objective,
   type State, type Stats, type Street, type ViewModel,
   cellKey, eventKindOf, fmtNum, isShape, round1,
@@ -239,6 +239,7 @@ export function computeStats(state: State, prices: Record<string, number>, elaps
     cells,
     covered,
     spent: state.spent,
+    elapsedSec,
     score: total + top * 2 - repeat * 100 - state.spent - elapsedSec,
   };
 }
@@ -384,6 +385,7 @@ export function toMapSummary(view: ViewModel): MapSummary {
       placed: shown.placed,
       cells: shown.cells,
       covered: shown.covered,
+      elapsedSec: shown.elapsedSec,
       score: shown.score,
     },
   };
@@ -734,14 +736,18 @@ export function previewPlacement(view: ViewModel, typeId: string, board: number,
   return { ok: true, cells };
 }
 
-export const EVENTS_NOTE = "这一局编排了地块变动，按对局时钟计时（从第一次调用工具起走字，人工暂停不计）。到点自动触发。触发前只公开触发秒数 atSec 和种类 kind，位置保密：lose_cell 是失去某一格（格子被禁用，若上面有建筑，建筑一并销毁且不退钱）；gain_cell 是得到某一格（界内的禁用格变为可用；若指向棋盘界外，棋盘会扩大到能容纳它，扩出来的其余格子保持禁用，单边最长 6）。已触发（fired: true）的变动会公开位置，盘面以 get_map 为准。布局时要为未知位置的变动留有余地，不要把价值全部押在少数几格上。";
+export const EVENTS_NOTE = "这一局编排了地块变动，按对局时钟计时（stats.elapsedSec 是当前秒数，从第一次调用工具起走字，人工暂停不计）。到点自动触发。只公开触发秒数 atSec 和种类 kind（lose_cell 失去一格 / gain_cell 得到一格），fired 表示是否已触发。位置永远不公布：过了触发秒数，自己重新看地图，从禁用格、棋盘尺寸和场上建筑的变化里找出落点。布局时为未知位置的变动留余地，不要把价值全部押在少数几格上。";
+
+export function discloseEvents(events: BlueprintEvent[], firedIds?: ReadonlySet<string>): DisclosedEvent[] {
+  return events.map(e => ({
+    atSec: e.atSec,
+    kind: eventKindOf(e.op),
+    fired: firedIds?.has(e.id) ?? false,
+  }));
+}
 
 export function objectivesOf(state: State, firedIds?: ReadonlySet<string>) {
-  const events = state.events.map(e => {
-    const fired = firedIds?.has(e.id) ?? false;
-    const base = { atSec: e.atSec, kind: eventKindOf(e.op), fired };
-    return fired ? { ...base, board: e.op.board, r: e.op.r, c: e.op.c } : base;
-  });
+  const events = discloseEvents(state.events, firedIds);
   return {
     rule: "先比 rank 为 1 的那一项，持平再比下一项。higher 越大越好，lower 越小越好。不要假设总地价一定排第一。",
     objectives: state.priorities.map((key, index) => ({

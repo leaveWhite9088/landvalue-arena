@@ -3,7 +3,7 @@ import test from "node:test";
 import { apply, applyBlueprintEvent } from "./apply.ts";
 import {
   auraCells, buildView, compareSchemes, computePrices, computeStats,
-  defaultState, findFormations, footprint, formatSnapshot, instanceCells, normalizeState, objectivesOf,
+  defaultState, discloseEvents, findFormations, footprint, formatSnapshot, instanceCells, normalizeState, objectivesOf,
 } from "./rules.ts";
 import { cellKey, round1, type State } from "./types.ts";
 
@@ -390,20 +390,16 @@ test("蓝图事件编排：校验时间和落点，导入导出能带上", () =>
   if (del.ok) assert.equal(del.state.events.length, 0);
 });
 
-test("对模型的披露：触发前只有时间和种类，触发后公开位置", () => {
+test("对模型的披露：只有时间、种类和是否触发，永不公开坐标", () => {
   let s = bare();
   const ok = apply(s, { type: "addEvent", atSec: 600, op: { type: "disable_cell", board: 1, r: 2, c: 3 } });
   assert.equal(ok.ok, true);
   if (!ok.ok) return;
   const id = ok.state.events[0].id;
   const before = objectivesOf(ok.state, new Set());
-  assert.equal(before.events?.length, 1);
-  assert.equal(before.events?.[0].kind, "lose_cell");
-  assert.equal(before.events?.[0].atSec, 600);
-  assert.equal("r" in (before.events?.[0] ?? {}), false);
+  assert.deepEqual(before.events?.[0], { atSec: 600, kind: "lose_cell", fired: false });
   const after = objectivesOf(ok.state, new Set([id]));
-  assert.equal(after.events?.[0].fired, true);
-  assert.equal((after.events?.[0] as { r?: number }).r, 2);
+  assert.deepEqual(after.events?.[0], { atSec: 600, kind: "lose_cell", fired: true });
   const none = objectivesOf(bare());
   assert.equal(none.events, undefined);
 });
@@ -423,4 +419,24 @@ test("广播视图默认打码事件坐标，触发或显式解锁才公开", ()
   assert.equal(fired.events[0].fired, true);
   const revealed = buildView(ok.state, 0, { revealAll: true });
   assert.equal(revealed.events[0].c, 3);
+});
+
+test("discloseEvents：只有时间、种类、是否触发", () => {
+  const events = [
+    { id: "e1", atSec: 600, op: { type: "disable_cell" as const, board: 1, r: 2, c: 3 } },
+    { id: "e2", atSec: 1200, op: { type: "enable_cell" as const, board: 2, r: 5, c: 1 } },
+  ];
+  const none = discloseEvents(events, new Set());
+  assert.deepEqual(none[0], { atSec: 600, kind: "lose_cell", fired: false });
+  const fired = discloseEvents(events, new Set(["e2"]));
+  assert.deepEqual(fired[1], { atSec: 1200, kind: "gain_cell", fired: true });
+  assert.equal(fired[0].fired, false);
+});
+
+test("stats 带对局时钟秒数，并计入得分", () => {
+  const s = bare();
+  const stats = computeStats(s, computePrices(s).prices, 75);
+  assert.equal(stats.elapsedSec, 75);
+  const now = computeStats(s, computePrices(s).prices, 0);
+  assert.equal(stats.score, now.score - 75);
 });
