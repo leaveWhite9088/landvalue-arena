@@ -36,14 +36,6 @@ export async function saveState(state: State) {
   await writeJson("state.json", state);
 }
 
-export async function loadEvents(): Promise<KanbanEvent[]> {
-  return (await readJson<KanbanEvent[]>("events.json")) ?? [];
-}
-
-export async function saveEvents(events: KanbanEvent[]) {
-  await writeJson("events.json", events);
-}
-
 export async function loadSaves(): Promise<SaveRecord[]> {
   return (await readJson<SaveRecord[]>("saves.json")) ?? [];
 }

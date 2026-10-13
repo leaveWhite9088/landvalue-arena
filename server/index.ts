@@ -11,7 +11,7 @@ import {
 } from "../shared/rules.ts";
 import type { EndedBy, KanbanEvent, RoundMeta, RoundRecord, SaveRecord, State, Stats, ToolName, UserCommand, ViewModel } from "../shared/types.ts";
 import { modelOf, tallyCalls } from "../shared/types.ts";
-import { loadEvents, loadRounds, loadSaves, loadState, saveEvents, saveMeta, saveRounds, saveSaves, saveState } from "./store.ts";
+import { loadRounds, loadSaves, loadState, saveMeta, saveRounds, saveSaves, saveState } from "./store.ts";
 
 const PORT = 26101;
 /** 查看事件编排坐标的密码。可用环境变量 LANDVALUE_EVENTS_PASSWORD 覆盖。 */
@@ -20,7 +20,6 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
 
 let state: State = await loadState();
-let events: KanbanEvent[] = await loadEvents();
 let saves: SaveRecord[] = await loadSaves();
 let rounds: RoundRecord[] = await loadRounds();
 await saveState(state);
@@ -47,7 +46,7 @@ function viewOf(): ViewModel {
 }
 
 function hello(ws: WebSocket) {
-  send(ws, { type: "hello", view: viewOf(), events: [], saves: saveMeta(saves), rounds: rounds.map(metaOf) });
+  send(ws, { type: "hello", view: viewOf(), saves: saveMeta(saves), rounds: rounds.map(metaOf) });
 }
 
 function elapsedOf(round: RoundRecord): number {
@@ -92,24 +91,6 @@ function broadcastRound(round: RoundRecord, event?: KanbanEvent) {
   });
 }
 
-async function pushEvent(event: KanbanEvent) {
-  events.push(event);
-  let snaps = 0;
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (!events[i].snapshot) continue;
-    snaps++;
-    if (snaps > 200) events[i] = { ...events[i], snapshot: undefined, canScrub: false };
-  }
-  await saveEvents(events);
-  broadcast({ type: "event", event });
-}
-
-async function clearEvents() {
-  events = [];
-  await saveEvents(events);
-  broadcast({ type: "events", events });
-}
-
 async function publishView() {
   await saveState(state);
   broadcast({ type: "view", view: viewOf() });
@@ -119,8 +100,6 @@ function publishSaves() {
   void saveSaves(saves);
   broadcast({ type: "saves", saves: saveMeta(saves) });
 }
-
-const CLEARS = new Set(["clearBoard", "reset", "resetBoard", "import", "load"]);
 
 async function runUserCommand(command: UserCommand): Promise<{ ok: boolean; error?: { code: string; message: string }; exportData?: State }> {
   if (command.type === "export") return { ok: true, exportData: state };
@@ -135,7 +114,6 @@ async function runUserCommand(command: UserCommand): Promise<{ ok: boolean; erro
     if (!found) return { ok: false, error: errorOf("not_found", "找不到这个存档。") };
     state = found.data;
     await publishView();
-    await clearEvents();
     return { ok: true };
   }
 
@@ -143,7 +121,6 @@ async function runUserCommand(command: UserCommand): Promise<{ ok: boolean; erro
   if (!applied.ok) return applied;
   state = applied.state;
   await publishView();
-  if (CLEARS.has(command.type)) await clearEvents();
   return { ok: true };
 }
 
