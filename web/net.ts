@@ -1,11 +1,9 @@
 import type { KanbanEvent, RoundMeta, SaveMeta, ScheduleEntry, UserCommand, ViewModel } from "../shared/types.ts";
 
-export type Hello = { type: "hello"; view: ViewModel; events: KanbanEvent[]; saves: SaveMeta[]; rounds?: RoundMeta[] };
+export type Hello = { type: "hello"; view: ViewModel; saves: SaveMeta[]; rounds?: RoundMeta[] };
 export type ServerMsg =
   | Hello
   | { type: "view"; view: ViewModel }
-  | { type: "event"; event: KanbanEvent }
-  | { type: "events"; events: KanbanEvent[] }
   | { type: "saves"; saves: SaveMeta[] }
   | { type: "rounds"; rounds: RoundMeta[] }
   | { type: "round"; roundId: string; meta: RoundMeta; view: ViewModel; event?: KanbanEvent }
@@ -16,8 +14,6 @@ export class Net {
   private pending = new Map<string, (msg: Extract<ServerMsg, { type: "result" }>) => void>();
   onHello: (msg: Hello) => void = () => {};
   onView: (view: ViewModel) => void = () => {};
-  onEvent: (event: KanbanEvent) => void = () => {};
-  onEvents: (events: KanbanEvent[]) => void = () => {};
   onSaves: (saves: SaveMeta[]) => void = () => {};
   onRounds: (rounds: RoundMeta[]) => void = () => {};
   onRound: (msg: Extract<ServerMsg, { type: "round" }>) => void = () => {};
@@ -31,8 +27,6 @@ export class Net {
       const msg = JSON.parse(String(ev.data)) as ServerMsg;
       if (msg.type === "hello") this.onHello(msg);
       else if (msg.type === "view") this.onView(msg.view);
-      else if (msg.type === "event") this.onEvent(msg.event);
-      else if (msg.type === "events") this.onEvents(msg.events);
       else if (msg.type === "saves") this.onSaves(msg.saves);
       else if (msg.type === "rounds") this.onRounds(msg.rounds);
       else if (msg.type === "round") this.onRound(msg);

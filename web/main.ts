@@ -21,7 +21,6 @@ const palette = new Palette(
 );
 
 let live: ViewModel | null = null;
-let events: KanbanEvent[] = [];
 let saves: SaveMeta[] = [];
 let rounds: RoundMeta[] = [];
 let watchId: string | null = null;
@@ -109,6 +108,8 @@ function enterWatch(id: string | null) {
   pinnedCell = null;
   selectedType = null;
   demolishMode = false;
+  // 换一局后恢复"新事件自动展开"，直到用户在这局里手动收起
+  suppressAuto = false;
   scene.clearGhost();
   if (!id) {
     watchView = null;
@@ -130,9 +131,8 @@ function enterWatch(id: string | null) {
 }
 
 function shown(): ViewModel | null {
-  const source = watchId ? watchEvents : events;
   if (scrubId) {
-    const event = source.find(e => e.id === scrubId);
+    const event = watchEvents.find(e => e.id === scrubId);
     if (event?.snapshot) return event.snapshot;
   }
   if (watchId && watchView) return watchView;
@@ -150,7 +150,7 @@ function paint() {
   else refreshGhost();
   ui.render({
     view,
-    events: watchId ? watchEvents : events,
+    events: watchEvents,
     selectedType,
     rotated,
     demolishMode,
@@ -225,14 +225,11 @@ net.onRound = msg => {
     watchView = msg.view;
     // 广播和 watch 拉取可能撞车，按 id 去重，防止同一步出现两次
     if (msg.event && !watchEvents.some(e => e.id === msg.event!.id)) watchEvents = watchEvents.concat(msg.event);
+    // 第一条事件到达时自动展开步骤轨；用户手动收起过就不展开
+    if (msg.event && railCollapsed && !suppressAuto) railCollapsed = false;
     paint();
     if (!railCollapsed) ui.scrollRail();
   } else paint();
-};
-net.onEvents = next => {
-  events = next;
-  scrubId = null;
-  paint();
 };
 net.onSaves = next => {
   saves = next;

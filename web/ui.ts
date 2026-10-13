@@ -310,6 +310,13 @@ export class UI {
   private renderRail(state: UiState) {
     const steps = countSteps(state.events);
     this.railTab.textContent = "步骤" + (steps ? " " + steps : "");
+    // 收起时一条消息都不进 DOM（节点留在缓存里，展开原样挂回）；
+    // CSS 的 display:none 只是第二道防线，杜绝任何层叠/媒体查询不同步导致的漏渲染
+    if (state.railCollapsed) {
+      if (this.railList.firstChild) this.railList.replaceChildren();
+      this.railEmpty = null;
+      return;
+    }
     this.reconcileRail(state);
   }
 

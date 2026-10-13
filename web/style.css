@@ -249,7 +249,9 @@ button { cursor: pointer; }
   background: #ededed;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: clip;
+  /* 绘制层面裁死：任何子元素都不可能在 rail 之外留下像素 */
+  contain: paint;
   display: flex;
   flex-direction: column;
 }
